@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Cost savings estimate · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_savings', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_savings_estimate_csv', engagement_id=eng.id) }}">Download .csv</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+<article class="statement">
+  <h1>Cost Savings Estimate</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}{% if eng.savings.finalized_at %} · Finalized {{ eng.savings.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Portfolio summary</h2>
+  <table class="checklist-table">
+    <tbody>
+      <tr><td>Opportunities recorded</td><td><strong>{{ summary.count }}</strong></td></tr>
+      <tr><td>By status</td><td><strong>{{ summary.by_status.approved }} approved · {{ summary.by_status.proposed }} proposed · {{ summary.by_status.rejected }} rejected</strong></td></tr>
+      <tr><td>Current annual cost (non-rejected)</td><td><strong>{{ summary.total_current_cost | money }}</strong></td></tr>
+      <tr><td>Total recurring savings / yr (non-rejected)</td><td><strong>{{ summary.total_recurring | money }}</strong></td></tr>
+      <tr><td>Total transition cost (non-rejected)</td><td><strong>{{ summary.total_transition | money }}</strong></td></tr>
+      <tr><td>Net first-year savings (non-rejected)</td><td><strong>{{ summary.total_first_year | money }}</strong></td></tr>
+      <tr><td>Approved-only recurring savings / yr</td><td><strong>{{ summary.approved_recurring | money }}</strong></td></tr>
+      <tr><td>Approved-only first-year savings</td><td><strong>{{ summary.approved_first_year | money }}</strong></td></tr>
+    </tbody>
+  </table>
+
+  <h2>Opportunities</h2>
+  {% if not opportunities %}
+    <p>No opportunities recorded yet.</p>
+  {% else %}
+    <table class="checklist-table">
+      <thead>
+        <tr>
+          <th>Opportunity</th>
+          <th>Status</th>
+          <th>Disposition</th>
+          <th>Products</th>
+          <th>Current cost</th>
+          <th>Recurring / yr</th>
+          <th>Transition</th>
+          <th>First-year net</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in opportunities %}
+          <tr>
+            <td>
+              <strong>{{ o.title }}</strong>
+              {% if o.notes %}<div class="meta">{{ o.notes }}</div>{% endif %}
+            </td>
+            <td>{{ status_label.get(o.status, o.status) }}</td>
+            <td>{{ disposition_label.get(o.disposition, o.disposition) }}</td>
+            <td>
+              {% for p in o.products %}{{ p.product_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+            </td>
+            <td>{{ o.current_annual_cost | money }}</td>
+            <td><strong>{{ o.totals.recurring | money }}</strong></td>
+            <td>{{ o.totals.transition_total | money }}</td>
+            <td><strong>{{ o.totals.first_year | money }}</strong></td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>Method</h2>
+  <p>
+    <strong>Net first-year savings</strong> = recurring annual savings + one-time savings &minus; migration cost &minus; training cost.<br>
+    <strong>Recurring savings</strong> repeats every year after the first; transition costs are a one-time investment.
+  </p>
+  <p>
+    Status legend: <em>Proposed</em> opportunities are estimates pending decision. <em>Approved</em> opportunities are committed and feed the conservative leadership rollup. <em>Rejected</em> opportunities are excluded from all rollups.
+  </p>
+</article>
+{% endblock %}

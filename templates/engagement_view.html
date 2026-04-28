@@ -171,11 +171,32 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 8 — Estimate Cost Savings</h2>
+      {% set sv = eng.get('savings') %}
+      {% if sv and sv.finalized %}
+        <div class="notice">Phase 8 finalized on {{ sv.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.savings == 'in_progress' %}
+        <div class="notice warn">Cost savings estimate in progress.</div>
+      {% else %}
+        <div class="notice warn">Cost savings estimate has not been started.</div>
+      {% endif %}
+      <p class="helper">Auto-seeds opportunities from Phase 5 dispositions and Phase 7 unused-license flags; per-opportunity worksheet rolls up to a portfolio total.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_savings', engagement_id=eng.id) }}">
+          {% if sv and sv.finalized %}Review savings estimate{% else %}Open savings workspace{% endif %}
+        </a>
+        {% if sv and sv.opportunities %}
+          <a class="btn secondary" href="{{ url_for('engagement_savings_estimate', engagement_id=eng.id) }}">View estimate</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 8 through 11 of the playbook will activate in upcoming releases — Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 9 through 11 of the playbook will activate in upcoming releases — Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

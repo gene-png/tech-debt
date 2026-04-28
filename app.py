@@ -111,6 +111,23 @@ DEBT_SEVERITIES = [
     ("high", "High"),
 ]
 
+# Phase 8 — Estimate Cost Savings ---------------------------------------------
+
+SAVINGS_DISPOSITION_CHOICES = [
+    ("retire", "Retire"),
+    ("replace", "Replace"),
+    ("consolidate", "Consolidate"),
+    ("renegotiate", "Renegotiate"),
+    ("reduce_licenses", "Reduce licenses"),
+    ("other", "Other"),
+]
+
+SAVINGS_STATUSES = [
+    ("proposed", "Proposed"),
+    ("approved", "Approved"),
+    ("rejected", "Rejected"),
+]
+
 # Phase 3 — Build Inventory ---------------------------------------------------
 
 PRODUCT_CATEGORIES = [
@@ -1781,6 +1798,446 @@ def engagement_overlap_analysis_csv(engagement_id):
                 d.get("notes", ""),
             ])
     fn = f"product-overlap-analysis-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — Estimate Cost Savings
+# ---------------------------------------------------------------------------
+
+def _ensure_savings(eng):
+    if "savings" in eng and "opportunities" in eng["savings"]:
+        return False
+    eng["savings"] = {
+        "opportunities": {},  # opp_id -> dict
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _new_opportunity(*, title, source, seed_key, product_ids, disposition,
+                     current_annual_cost, recurring_annual_savings,
+                     migration_cost=0.0, training_cost=0.0, one_time_savings=0.0,
+                     notes="", status="proposed"):
+    oid = uuid.uuid4().hex[:8]
+    now = datetime.utcnow().isoformat() + "Z"
+    return {
+        "id": oid,
+        "title": title,
+        "source": source,                 # "phase5" | "phase7-unused" | "manual"
+        "seed_key": seed_key,             # stable key to avoid duplicate seeding
+        "product_ids": list(product_ids),
+        "disposition": disposition,
+        "current_annual_cost": float(current_annual_cost),
+        "recurring_annual_savings": float(recurring_annual_savings),
+        "migration_cost": float(migration_cost),
+        "training_cost": float(training_cost),
+        "one_time_savings": float(one_time_savings),
+        "notes": notes,
+        "status": status,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _opportunity_totals(opp):
+    """Compute display values: first-year net savings + recurring."""
+    rec = float(opp.get("recurring_annual_savings") or 0)
+    one = float(opp.get("one_time_savings") or 0)
+    mig = float(opp.get("migration_cost") or 0)
+    trn = float(opp.get("training_cost") or 0)
+    return {
+        "first_year": rec + one - mig - trn,
+        "recurring": rec,
+        "transition_total": mig + trn,
+    }
+
+
+def _seed_savings_opportunities(eng):
+    """
+    Seed opportunities from:
+      1. Phase 5 dispositions (retire / replace / consolidate / renegotiate)
+      2. Phase 7 'unused' flags that aren't already covered by a Phase 5 entry
+    Returns the number of new opportunities created.
+    """
+    _ensure_savings(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    existing_seeds = {
+        opp.get("seed_key")
+        for opp in eng["savings"]["opportunities"].values()
+        if opp.get("seed_key")
+    }
+    created = 0
+
+    # 1. Phase 5 dispositions
+    p5_dispositions = eng.get("overlap", {}).get("dispositions", {})
+    seeded_from_p5 = set()
+    for pid, drec in p5_dispositions.items():
+        disp = (drec.get("disposition") or "").strip()
+        if disp not in {"retire", "replace", "consolidate", "renegotiate"}:
+            continue
+        seed_key = f"phase5:{pid}"
+        seeded_from_p5.add(pid)
+        if seed_key in existing_seeds:
+            continue
+        p = products_by_id.get(pid)
+        if not p:
+            continue
+        annual = _safe_float(p.get("total_annual_cost"))
+        # Renegotiate doesn't capture the whole cost — default to 20% recurring.
+        recurring = annual * (0.2 if disp == "renegotiate" else 1.0)
+        title = f"{disp.title()} {p.get('product_name', 'product')}"
+        if disp == "consolidate" and p.get("category"):
+            title += f" — {p['category']}"
+        opp = _new_opportunity(
+            title=title,
+            source="phase5",
+            seed_key=seed_key,
+            product_ids=[pid],
+            disposition=disp,
+            current_annual_cost=annual,
+            recurring_annual_savings=recurring,
+            notes=(drec.get("notes") or "").strip(),
+        )
+        eng["savings"]["opportunities"][opp["id"]] = opp
+        existing_seeds.add(seed_key)
+        created += 1
+
+    # 2. Phase 7 'unused' flags not already covered by Phase 5
+    p7_flags = eng.get("tech_debt", {}).get("flags", {})
+    for pid, frec in p7_flags.items():
+        if "unused" not in (frec.get("flags") or []):
+            continue
+        if pid in seeded_from_p5:
+            continue  # Phase 5 retire/replace already covers it
+        seed_key = f"phase7-unused:{pid}"
+        if seed_key in existing_seeds:
+            continue
+        p = products_by_id.get(pid)
+        if not p:
+            continue
+        annual = _safe_float(p.get("total_annual_cost"))
+        purchased = _safe_int(p.get("licenses_purchased"))
+        active = _safe_int(p.get("active_users"))
+        cpl = _safe_float(p.get("cost_per_license"))
+        # Recurring = cost_per_license * unused-license-count.
+        # Fallback: if no per-license cost, assume reducing to active users.
+        if cpl > 0 and purchased > 0:
+            unused = max(purchased - active, 0)
+            recurring = cpl * unused
+        elif purchased > 0:
+            unused_ratio = max(purchased - active, 0) / purchased
+            recurring = annual * unused_ratio
+        else:
+            recurring = annual
+        opp = _new_opportunity(
+            title=f"Reduce unused licenses on {p.get('product_name', 'product')}",
+            source="phase7-unused",
+            seed_key=seed_key,
+            product_ids=[pid],
+            disposition="reduce_licenses",
+            current_annual_cost=annual,
+            recurring_annual_savings=recurring,
+            notes=(frec.get("notes") or "").strip(),
+        )
+        eng["savings"]["opportunities"][opp["id"]] = opp
+        existing_seeds.add(seed_key)
+        created += 1
+
+    return created
+
+
+def _savings_summary(eng):
+    opps = eng.get("savings", {}).get("opportunities", {}).values()
+    by_status = {"proposed": 0, "approved": 0, "rejected": 0}
+    total_recurring = 0.0
+    total_first_year = 0.0
+    total_transition = 0.0
+    total_current_cost = 0.0
+    approved_recurring = 0.0
+    approved_first_year = 0.0
+    for opp in opps:
+        st = opp.get("status", "proposed")
+        if st in by_status:
+            by_status[st] += 1
+        if st == "rejected":
+            continue
+        t = _opportunity_totals(opp)
+        total_recurring += t["recurring"]
+        total_first_year += t["first_year"]
+        total_transition += t["transition_total"]
+        total_current_cost += float(opp.get("current_annual_cost") or 0)
+        if st == "approved":
+            approved_recurring += t["recurring"]
+            approved_first_year += t["first_year"]
+    return {
+        "count": len(eng.get("savings", {}).get("opportunities", {})),
+        "by_status": by_status,
+        "total_current_cost": total_current_cost,
+        "total_recurring": total_recurring,
+        "total_first_year": total_first_year,
+        "total_transition": total_transition,
+        "approved_recurring": approved_recurring,
+        "approved_first_year": approved_first_year,
+    }
+
+
+@app.route("/engagements/<engagement_id>/savings", methods=["GET"])
+def engagement_savings(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_savings(eng):
+        if (eng["phase_progress"].get("tech_debt") == "complete"
+                and eng["phase_progress"].get("savings") == "not_started"):
+            eng["phase_progress"]["savings"] = "in_progress"
+        storage.save_engagement(eng)
+
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    opps_sorted = sorted(
+        eng["savings"]["opportunities"].values(),
+        key=lambda o: (
+            {"approved": 0, "proposed": 1, "rejected": 2}.get(o.get("status"), 3),
+            -float(o.get("recurring_annual_savings") or 0),
+        ),
+    )
+    # Annotate each opp with computed totals + product details for the template.
+    annotated = []
+    for o in opps_sorted:
+        details = []
+        for pid in o.get("product_ids", []):
+            p = products_by_id.get(pid)
+            if p:
+                details.append({
+                    "id": pid,
+                    "product_name": p.get("product_name", ""),
+                    "vendor": p.get("vendor", ""),
+                    "category": p.get("category", ""),
+                    "annual_cost": _safe_float(p.get("total_annual_cost")),
+                })
+        annotated.append({**o, "totals": _opportunity_totals(o), "products": details})
+
+    summary = _savings_summary(eng)
+    return render_template(
+        "savings.html",
+        eng=eng,
+        opportunities=annotated,
+        products=products,
+        summary=summary,
+        disposition_choices=SAVINGS_DISPOSITION_CHOICES,
+        statuses=SAVINGS_STATUSES,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/savings/seed", methods=["POST"])
+def engagement_savings_seed(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    created = _seed_savings_opportunities(eng)
+    if eng["phase_progress"].get("savings") == "not_started":
+        eng["phase_progress"]["savings"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id) + f"?seeded={created}")
+
+
+@app.route("/engagements/<engagement_id>/savings/new", methods=["POST"])
+def engagement_savings_new(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    title = request.form.get("title", "").strip() or "Untitled opportunity"
+    product_ids = request.form.getlist("product_ids")
+    disposition = request.form.get("disposition", "other").strip()
+    valid_dispositions = {k for k, _l in SAVINGS_DISPOSITION_CHOICES}
+    if disposition not in valid_dispositions:
+        disposition = "other"
+    products_by_id = {p["id"]: p for p in eng.get("inventory", {}).get("products", [])}
+    current_cost = sum(_safe_float(products_by_id[pid].get("total_annual_cost"))
+                       for pid in product_ids if pid in products_by_id)
+    opp = _new_opportunity(
+        title=title,
+        source="manual",
+        seed_key="",
+        product_ids=product_ids,
+        disposition=disposition,
+        current_annual_cost=current_cost,
+        recurring_annual_savings=current_cost if disposition in {"retire", "replace", "consolidate"} else 0.0,
+    )
+    eng["savings"]["opportunities"][opp["id"]] = opp
+    if eng["phase_progress"].get("savings") == "not_started":
+        eng["phase_progress"]["savings"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id) + f"#opp-{opp['id']}")
+
+
+@app.route("/engagements/<engagement_id>/savings/<opp_id>/edit", methods=["POST"])
+def engagement_savings_edit(engagement_id, opp_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    opp = eng["savings"]["opportunities"].get(opp_id)
+    if not opp:
+        abort(404)
+
+    valid_dispositions = {k for k, _l in SAVINGS_DISPOSITION_CHOICES}
+    valid_statuses = {k for k, _l in SAVINGS_STATUSES}
+
+    title = request.form.get("title", "").strip()
+    if title:
+        opp["title"] = title
+    disp = request.form.get("disposition", "").strip()
+    if disp in valid_dispositions:
+        opp["disposition"] = disp
+    status = request.form.get("status", "").strip()
+    if status in valid_statuses:
+        opp["status"] = status
+    opp["current_annual_cost"] = _safe_float(request.form.get("current_annual_cost"))
+    opp["recurring_annual_savings"] = _safe_float(request.form.get("recurring_annual_savings"))
+    opp["one_time_savings"] = _safe_float(request.form.get("one_time_savings"))
+    opp["migration_cost"] = _safe_float(request.form.get("migration_cost"))
+    opp["training_cost"] = _safe_float(request.form.get("training_cost"))
+    opp["notes"] = request.form.get("notes", "").strip()
+    opp["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id) + f"#opp-{opp_id}")
+
+
+@app.route("/engagements/<engagement_id>/savings/<opp_id>/status", methods=["POST"])
+def engagement_savings_status(engagement_id, opp_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    opp = eng["savings"]["opportunities"].get(opp_id)
+    if not opp:
+        abort(404)
+    status = request.form.get("status", "").strip()
+    valid_statuses = {k for k, _l in SAVINGS_STATUSES}
+    if status in valid_statuses:
+        opp["status"] = status
+        opp["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id) + f"#opp-{opp_id}")
+
+
+@app.route("/engagements/<engagement_id>/savings/<opp_id>/delete", methods=["POST"])
+def engagement_savings_delete(engagement_id, opp_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    eng["savings"]["opportunities"].pop(opp_id, None)
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/savings/finalize", methods=["POST"])
+def engagement_savings_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["savings"]["finalized"] = False
+        eng["savings"]["finalized_at"] = None
+        eng["phase_progress"]["savings"] = "in_progress"
+        eng["status"] = "savings"
+    else:
+        eng["savings"]["finalized"] = True
+        eng["savings"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["savings"] = "complete"
+        eng["status"] = "validation"
+        if eng["phase_progress"].get("validation") == "not_started":
+            eng["phase_progress"]["validation"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_savings", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/savings/estimate")
+def engagement_savings_estimate(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    opps = sorted(
+        eng["savings"]["opportunities"].values(),
+        key=lambda o: (
+            {"approved": 0, "proposed": 1, "rejected": 2}.get(o.get("status"), 3),
+            -float(o.get("recurring_annual_savings") or 0),
+        ),
+    )
+    annotated = []
+    for o in opps:
+        details = [
+            {"product_name": products_by_id.get(pid, {}).get("product_name", ""),
+             "vendor": products_by_id.get(pid, {}).get("vendor", "")}
+            for pid in o.get("product_ids", []) if pid in products_by_id
+        ]
+        annotated.append({**o, "totals": _opportunity_totals(o), "products": details})
+    summary = _savings_summary(eng)
+    return render_template(
+        "savings_estimate.html",
+        eng=eng, opportunities=annotated, summary=summary,
+        disposition_label={k: l for k, l in SAVINGS_DISPOSITION_CHOICES},
+        status_label={k: l for k, l in SAVINGS_STATUSES},
+    )
+
+
+@app.route("/engagements/<engagement_id>/savings/estimate.csv")
+def engagement_savings_estimate_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_savings(eng)
+    products_by_id = {p["id"]: p for p in eng.get("inventory", {}).get("products", [])}
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([
+        "Title", "Status", "Disposition", "Products", "Source",
+        "Current annual cost", "Recurring annual savings",
+        "One-time savings", "Migration cost", "Training cost",
+        "Net first-year savings", "Notes",
+    ])
+    disposition_label = {k: l for k, l in SAVINGS_DISPOSITION_CHOICES}
+    status_label = {k: l for k, l in SAVINGS_STATUSES}
+    for o in sorted(
+        eng["savings"]["opportunities"].values(),
+        key=lambda x: ({"approved": 0, "proposed": 1, "rejected": 2}.get(x.get("status"), 3),
+                       -float(x.get("recurring_annual_savings") or 0)),
+    ):
+        names = [products_by_id.get(pid, {}).get("product_name", "")
+                 for pid in o.get("product_ids", []) if pid in products_by_id]
+        t = _opportunity_totals(o)
+        writer.writerow([
+            o.get("title", ""),
+            status_label.get(o.get("status", ""), o.get("status", "")),
+            disposition_label.get(o.get("disposition", ""), o.get("disposition", "")),
+            "; ".join(names),
+            o.get("source", ""),
+            f"{float(o.get('current_annual_cost') or 0):.2f}",
+            f"{float(o.get('recurring_annual_savings') or 0):.2f}",
+            f"{float(o.get('one_time_savings') or 0):.2f}",
+            f"{float(o.get('migration_cost') or 0):.2f}",
+            f"{float(o.get('training_cost') or 0):.2f}",
+            f"{t['first_year']:.2f}",
+            o.get("notes", ""),
+        ])
+    fn = f"cost-savings-estimate-{eng.get('id')}.csv"
     return Response(
         sio.getvalue(),
         mimetype="text/csv",

@@ -30,6 +30,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `54827a5` (2026-04-28) — Phase 6: AI Assisted Comparison (9 files changed, +785 lines).
 - `5bf593e` (2026-04-28) — Backfill 54827a5 commit hash in change log.
 - `8a56e8b` (2026-04-28) — Phase 7: Identify Technical Debt (8 files changed, +764 lines).
+- `df10622` (2026-04-28) — Backfill 8a56e8b commit hash in change log.
+- *(2026-04-28) Phase 8 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -44,7 +46,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 5 | Identify Product Overlap       | **Live** |
 | 6 | AI Assisted Comparison         | **Live** |
 | 7 | Identify Technical Debt        | **Live** |
-| 8 | Estimate Cost Savings          | Planned  |
+| 8 | Estimate Cost Savings          | **Live** |
 | 9 | Validate with Stakeholders     | Planned  |
 | 10 | Create Recommendations        | Planned  |
 | 11 | Create the Executive Summary  | Planned  |
@@ -152,6 +154,24 @@ tech_debt: {                            ← Phase 7
       severity: "low" | "medium" | "high",
       notes,
       updated_at,
+    }
+  },
+  finalized, finalized_at,
+}
+
+savings: {                              ← Phase 8
+  opportunities: {
+    "<opp_id>": {
+      id, title, source, seed_key,    ← source = phase5 | phase7-unused | manual
+      product_ids: [...],
+      disposition,                    ← retire | replace | consolidate | renegotiate | reduce_licenses | other
+      current_annual_cost,            ← editable; auto-summed from product_ids on creation
+      recurring_annual_savings,       ← editable; default depends on disposition
+      one_time_savings,               ← e.g. break renewal, renegotiation discount
+      migration_cost, training_cost,
+      notes,
+      status,                         ← proposed | approved | rejected
+      created_at, updated_at,
     }
   },
   finalized, finalized_at,
@@ -341,6 +361,44 @@ The workspace supports three filters via query string: `?flag=<key>` (only rows 
 - GET `/engagements/<id>/tech-debt/register` — printable register, sorted by severity (high first) then product name
 - GET `/engagements/<id>/tech-debt/register.csv` — CSV export
 
+## Phase 8 deliverable
+
+The **Cost Savings Estimate** is a structured worksheet of consolidation opportunities, each with current cost / transition cost / one-time / recurring / first-year-net broken out and rolled up to a portfolio total. Available as:
+- Workspace: `/engagements/<id>/savings`
+- Printable estimate: `/engagements/<id>/savings/estimate`
+- CSV export: `/engagements/<id>/savings/estimate.csv`
+
+### Auto-seeding from earlier phases
+
+Click **Seed from Phase 5 + 7** to bootstrap opportunities. Idempotent — re-clicking won't duplicate (uses a stable `seed_key`):
+- **Phase 5 dispositions** (`retire`, `replace`, `consolidate`, `renegotiate`) → one opportunity per product. `recurring_annual_savings` defaults to the product's full `total_annual_cost`, except `renegotiate` defaults to 20% (representing a discount, not full savings).
+- **Phase 7 `unused` flag** (only when not already covered by Phase 5) → "Reduce unused licenses" opportunity. `recurring_annual_savings = cost_per_license × (purchased − active_users)`. Falls back to a proportional split of annual cost if per-license cost is missing.
+
+User can add **custom opportunities** alongside seeded ones (multi-product, free-form title, dropdown disposition).
+
+### Per-opportunity worksheet
+
+Each opportunity card has editable fields for `current_annual_cost`, `recurring_annual_savings`, `one_time_savings`, `migration_cost`, `training_cost`, plus title / disposition / status / notes. Three computed totals shown live below:
+- **Recurring / yr** = `recurring_annual_savings`
+- **Net first-year** = `recurring + one_time − migration − training`
+- **Transition cost** = `migration + training`
+
+### Status-aware rollups
+
+The portfolio summary shows two views: an **all-non-rejected** total (proposed + approved) and an **approved-only** total. Rejected opportunities are excluded from both. Approved-only is the conservative number to share with leadership; non-rejected is the upside if every proposed opportunity lands.
+
+### Routes
+
+- GET `/engagements/<id>/savings` — workspace
+- POST `/engagements/<id>/savings/seed` — auto-seed from Phase 5 + 7 (idempotent)
+- POST `/engagements/<id>/savings/new` — add a custom opportunity
+- POST `/engagements/<id>/savings/<opp_id>/edit` — update one opportunity (all fields)
+- POST `/engagements/<id>/savings/<opp_id>/status` — quick-action approve / reject / reset
+- POST `/engagements/<id>/savings/<opp_id>/delete` — delete one opportunity
+- POST `/engagements/<id>/savings/finalize` — finalize / reopen (advances `status` to `validation`, pre-marks Phase 9 `in_progress`)
+- GET `/engagements/<id>/savings/estimate` — printable HTML
+- GET `/engagements/<id>/savings/estimate.csv` — CSV export
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -384,6 +442,15 @@ The workspace supports three filters via query string: `?flag=<key>` (only rows 
 | `/engagements/<id>/tech-debt/finalize` | POST | Phase 7 — finalize / reopen |
 | `/engagements/<id>/tech-debt/register` | GET | Phase 7 — printable findings register |
 | `/engagements/<id>/tech-debt/register.csv` | GET | Phase 7 — CSV export |
+| `/engagements/<id>/savings` | GET | Phase 8 — savings workspace |
+| `/engagements/<id>/savings/seed` | POST | Phase 8 — auto-seed from Phase 5 + 7 |
+| `/engagements/<id>/savings/new` | POST | Phase 8 — add a custom opportunity |
+| `/engagements/<id>/savings/<oid>/edit` | POST | Phase 8 — update opportunity fields |
+| `/engagements/<id>/savings/<oid>/status` | POST | Phase 8 — quick approve / reject / reset |
+| `/engagements/<id>/savings/<oid>/delete` | POST | Phase 8 — delete opportunity |
+| `/engagements/<id>/savings/finalize` | POST | Phase 8 — finalize / reopen |
+| `/engagements/<id>/savings/estimate` | GET | Phase 8 — printable estimate |
+| `/engagements/<id>/savings/estimate.csv` | GET | Phase 8 — CSV export |
 
 ## Decisions made
 
@@ -422,11 +489,12 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 5 (Identify Overlap) — per-category comparison?~~ **Resolved: yes. Categories with 2+ products surface as overlap candidates; per-product disposition selector + risk + notes; potential savings computed from Retire/Replace/Consolidate dispositions; printable analysis + CSV export.**
 - ~~Phase 6 (AI Assisted Comparison) — auto-run + privacy?~~ **Resolved: auto-run on first visit when stale (background thread), manual re-run button always available; whitelist anonymization with PROD_NNN tokens; vendor / product names retained because they're public; owners / notes / internal systems / engagement metadata stripped; de-anon map ephemeral (never persisted).**
 - ~~Phase 7 (Identify Technical Debt) — per-product flag-checker?~~ **Resolved: yes. 14 debt flags from the playbook, severity selector, free-text notes; auto-suggested flags derived from inventory data (no_owner, unclear_mission, duplicative, unused, poor_adoption, outside_governance, high_cost_low_value, renewal_no_justification); clickable suggestion chips tick the corresponding checkbox; printable register + CSV export.**
+- ~~Phase 8 (Estimate Cost Savings) — separate worksheet or implicit in Phases 5/7?~~ **Resolved: separate worksheet that auto-seeds from Phase 5 dispositions + Phase 7 unused flags. Per-opportunity card with current cost / recurring savings / one-time / migration / training, status (proposed/approved/rejected), and a portfolio rollup that splits "non-rejected" from "approved-only" — the conservative number leadership uses.**
 - **`ANTHROPIC_API_KEY` setup** — chip dropped to spin off a separate session that exports the key, restarts the server, and verifies a real Phase 6 run. Not a blocker for further phase work.
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
 - Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
 - Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
-- Phase 8 (Estimate Cost Savings) — much of the math is already implicit in earlier phases (Phase 5 sums savings from Retire/Replace/Consolidate; Phase 7 captures cost in flagged products). Phase 8 should bring it together as a structured savings worksheet: per opportunity, current cost / migration cost / training cost / first-year savings / recurring savings, plus a portfolio rollup. Likely a list of "savings opportunity" objects keyed off the Phase 5 dispositions and Phase 7 flags.
+- Phase 9 (Validate with Stakeholders) — the playbook frames this as a series of structured conversations. Likely a per-opportunity validation pane: list of stakeholder roles (IT, Cybersecurity, Finance, Procurement, BU owner, sysadmin, power user, compliance), with status per stakeholder (consulted / agreed / pushback), validation date, notes, and quoted answers to the seven validation questions. Output: stakeholder validation notes deliverable.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -522,3 +590,14 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Smoke test (Flask test client, file-based): seeded 6 products covering each detector path. Verified suggestions: ShadowApp gets `no_owner` + `unclear_mission` + `duplicative` + `outside_governance`; GhostTool (100 assigned, 0 active) gets `unused`; DustyTool (5/100 active) gets `poor_adoption`; FancySaaS (top-quartile cost, 200/1000 users) gets `high_cost_low_value`; Okta gets nothing (healthy). Saved high-severity flags on ShadowApp + medium on GhostTool + low on DustyTool. Empty submission for Okta correctly omits it from the flags map. Filter-by-severity, filter-by-flag, only-with-debt all return correct subsets. Register HTML and CSV both render with 3 flagged products. Finalize advances engagement to Phase 8 (`savings` pre-marked `in_progress`); reopen reverses.
 
 - Spawned a follow-up task chip: "Set up ANTHROPIC_API_KEY for Phase 6" — covers exporting the key, restarting the server, verifying a real Phase 6 run, and confirming the privacy claims (no sensitive strings in `ai_review.raw_response`).
+
+### 2026-04-28 — Phase 8 build (Estimate Cost Savings)
+
+- Added Phase 8 constants to `app.py`: `SAVINGS_DISPOSITION_CHOICES` (6 — retire/replace/consolidate/renegotiate/reduce_licenses/other) and `SAVINGS_STATUSES` (proposed/approved/rejected).
+- Helpers: `_ensure_savings`, `_new_opportunity` factory, `_opportunity_totals` (computes recurring / first-year / transition_total), `_seed_savings_opportunities` (idempotent — uses stable `seed_key` like `phase5:<pid>` or `phase7-unused:<pid>`), `_savings_summary` (split rollup: non-rejected vs approved-only).
+- Routes: `engagement_savings` (GET, sorts opps by status then descending recurring), `engagement_savings_seed` (POST, creates seeded opps from Phase 5 dispositions + Phase 7 `unused` flags), `engagement_savings_new` (POST, manual opp), `engagement_savings_edit` (POST, full update), `engagement_savings_status` (POST, quick approve/reject/reset), `engagement_savings_delete` (POST), `engagement_savings_finalize`, `engagement_savings_estimate` (printable HTML), `engagement_savings_estimate_csv`.
+- Seed semantics: Phase 5 `retire` / `replace` / `consolidate` → recurring = full annual cost; `renegotiate` → recurring = 20% of annual cost (representing a discount, not full retirement). Phase 7 `unused` → recurring = `cost_per_license × (purchased − active_users)` when per-license cost is known, else proportional split of annual cost. Re-seeding skips opportunities already present (matching by `seed_key`).
+- New templates: `savings.html` (6 summary tiles, seed/add buttons, per-opportunity card with editable title input, disposition + status selectors, 5 numeric inputs in a responsive grid, live computed totals panel showing recurring / net first-year / transition cost, quick-action footer for approve/reject/reset/delete; "Add custom opportunity" form with multi-select product picker; finalize panel) and `savings_estimate.html` (printable: portfolio summary table + opportunities table sorted by status then savings + method + status legend).
+- Updated `_sidebar.html`, `engagement_view.html`, `home.html` to surface Phase 8 as Live.
+- New CSS: `.opp-card` with status-colored left-border (green=approved, blue=proposed, red+dimmed=rejected), `.opp-title-input` (in-place editable title), `.opp-numbers` responsive grid, `.opp-totals` panel with `.opp-total-value` typography, `.opp-quick-actions` footer.
+- Smoke test (Flask test client, file-based): seeded inventory with 3 PM tools + 1 unused product + 1 large CRM. Set Phase 5 dispositions (Asana retire, Trello consolidate, FancySaaS renegotiate) and Phase 7 `unused` on GhostTool. Seed call created exactly 4 opportunities with correct recurring values: Asana $1k (full retire), Trello $300 (consolidate), FancySaaS $4k (20% of $20k renegotiate), GhostTool $5k (cost_per_license × unused count). Re-seed was idempotent (still 4). Edited Asana with $200 migration + $150 training and approved status → totals computed correctly: recurring $1k, first-year $650, transition $350. Status shortcuts moved Trello → approved, FancySaaS → rejected. Summary verified: count=4, approved=2, proposed=1, rejected=1; non-rejected recurring = $6,300; non-rejected first-year = $5,950 (= 6300 − 350 transition); approved-only recurring = $1,300. Custom multi-product opportunity (Jira + Trello bundle) auto-summed to $1,900. Delete worked. Estimate HTML and CSV both render correctly. Finalize advanced engagement to Phase 9 (`validation` pre-marked `in_progress`); reopen reverses. (Caught one test typo — case mismatch in product-name search.)

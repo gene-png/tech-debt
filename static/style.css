@@ -764,3 +764,84 @@ input:focus, textarea:focus, select:focus {
   margin-left: 10px;
   vertical-align: middle;
 }
+
+/* ---------- Phase 8: cost savings ---------- */
+
+.opp-card { border-left: 3px solid var(--border-strong); }
+.opp-card.opp-approved { border-left-color: var(--good); }
+.opp-card.opp-rejected { border-left-color: var(--danger); opacity: 0.78; }
+.opp-card.opp-proposed { border-left-color: var(--accent); }
+
+.opp-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.opp-title-input {
+  width: 100%;
+  font-size: 16px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: 4px;
+}
+.opp-title-input:hover,
+.opp-title-input:focus {
+  background: #fff;
+  border-color: var(--border-strong);
+}
+
+.opp-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.opp-num-cell label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.opp-num-cell input { font-variant-numeric: tabular-nums; }
+
+.opp-totals {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+  background: #fafbfc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 14px;
+}
+.opp-total-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.opp-total-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+.opp-total-value.good { color: var(--good); }
+.opp-total-value.danger { color: var(--danger); }
+
+.opp-quick-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dotted var(--border);
+}

@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block title %}Cost savings · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'savings' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 8 — Estimate Cost Savings</h1>
+      <p class="lead">For each consolidation opportunity, estimate current cost, transition cost, and net savings. Opportunities can be auto-seeded from Phase 5 dispositions and Phase 7 unused-license flags, then refined here.</p>
+
+      {% set s = eng.savings %}
+      {% if s.finalized %}
+        <div class="notice">Phase 8 finalized on {{ s.finalized_at[:10] }}.</div>
+      {% endif %}
+      {% if request.args.get('seeded') %}
+        <div class="notice">Seeded {{ request.args.get('seeded') }} new opportunit{{ 'y' if request.args.get('seeded') == '1' else 'ies' }} from earlier phases.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.count }}</div><div class="lbl">Opportunities</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.by_status.approved }}</div><div class="lbl">Approved</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.by_status.proposed }}</div><div class="lbl">Proposed</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.by_status.rejected }}</div><div class="lbl">Rejected</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.total_recurring | money }}</div><div class="lbl">Recurring savings / yr</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.total_first_year | money }}</div><div class="lbl">Net first-year savings</div></div>
+      </div>
+
+      <div class="actions">
+        <form method="post" action="{{ url_for('engagement_savings_seed', engagement_id=eng.id) }}" class="inline-form">
+          <button class="btn" type="submit">Seed from Phase 5 + 7</button>
+        </form>
+        <a class="btn secondary" href="#new-opportunity">+ Add custom opportunity</a>
+        <a class="btn secondary" href="{{ url_for('engagement_savings_estimate', engagement_id=eng.id) }}">View savings estimate</a>
+        <a class="btn secondary" href="{{ url_for('engagement_savings_estimate_csv', engagement_id=eng.id) }}">Download .csv</a>
+      </div>
+      <p class="helper" style="margin-top: 12px;">
+        <strong>Approved-only rollup:</strong> {{ summary.approved_recurring | money }}/yr recurring · {{ summary.approved_first_year | money }} first-year. Approve or reject each opportunity to see the conservative number leadership will rely on.
+      </p>
+    </div>
+
+    {# ----- Opportunities ----- #}
+    {% if opportunities %}
+      {% for o in opportunities %}
+        <div class="panel opp-card opp-{{ o.status }}" id="opp-{{ o.id }}">
+          <form method="post" action="{{ url_for('engagement_savings_edit', engagement_id=eng.id, opp_id=o.id) }}">
+            <div class="opp-card-header">
+              <div style="flex: 1; min-width: 320px;">
+                <input type="text" name="title" value="{{ o.title }}" class="opp-title-input">
+                <div class="meta" style="margin-top: 4px;">
+                  Source: {{ o.source }}
+                  {% if o.products %} ·
+                    {% for p in o.products %}<a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}" class="tag cat">{{ p.product_name }}</a>{% endfor %}
+                  {% endif %}
+                </div>
+              </div>
+              <div style="flex: 0 0 auto; text-align: right;">
+                <span class="status-pill status-{{ 'received' if o.status == 'approved' else 'requested' if o.status == 'proposed' else 'waived' }}">{{ o.status | upper }}</span>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top: 12px;">
+              <div class="col" style="flex: 0 0 200px;">
+                <label>Disposition</label>
+                <select name="disposition">
+                  {% for k, l in disposition_choices %}
+                    <option value="{{ k }}" {% if o.disposition == k %}selected{% endif %}>{{ l }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col" style="flex: 0 0 180px;">
+                <label>Status</label>
+                <select name="status">
+                  {% for k, l in statuses %}
+                    <option value="{{ k }}" {% if o.status == k %}selected{% endif %}>{{ l }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+
+            <div class="opp-numbers">
+              <div class="opp-num-cell">
+                <label>Current annual cost ($)</label>
+                <input type="text" name="current_annual_cost" value="{{ '%g' % o.current_annual_cost }}">
+              </div>
+              <div class="opp-num-cell">
+                <label>Recurring savings ($)</label>
+                <input type="text" name="recurring_annual_savings" value="{{ '%g' % o.recurring_annual_savings }}">
+                <p class="helper" style="margin: 4px 0 0;">Defaults to current cost for retire/replace/consolidate.</p>
+              </div>
+              <div class="opp-num-cell">
+                <label>One-time savings ($)</label>
+                <input type="text" name="one_time_savings" value="{{ '%g' % o.one_time_savings }}">
+                <p class="helper" style="margin: 4px 0 0;">e.g. break renewal, renegotiation discount.</p>
+              </div>
+              <div class="opp-num-cell">
+                <label>Migration cost ($)</label>
+                <input type="text" name="migration_cost" value="{{ '%g' % o.migration_cost }}">
+              </div>
+              <div class="opp-num-cell">
+                <label>Training cost ($)</label>
+                <input type="text" name="training_cost" value="{{ '%g' % o.training_cost }}">
+              </div>
+            </div>
+
+            <div class="opp-totals">
+              <div>
+                <span class="opp-total-label">Recurring / yr</span>
+                <span class="opp-total-value good">{{ o.totals.recurring | money }}</span>
+              </div>
+              <div>
+                <span class="opp-total-label">Net first-year</span>
+                <span class="opp-total-value">{{ o.totals.first_year | money }}</span>
+              </div>
+              <div>
+                <span class="opp-total-label">Transition cost</span>
+                <span class="opp-total-value danger">{{ o.totals.transition_total | money }}</span>
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 10px;">
+              <label>Notes</label>
+              <input type="text" name="notes" value="{{ o.notes or '' }}" placeholder="rationale, dependencies, owner ask…">
+            </div>
+
+            <div class="actions">
+              <button class="btn secondary" type="submit">Save</button>
+            </div>
+          </form>
+
+          <div class="opp-quick-actions">
+            <form method="post" action="{{ url_for('engagement_savings_status', engagement_id=eng.id, opp_id=o.id) }}" class="inline-form">
+              <input type="hidden" name="status" value="approved">
+              <button class="btn-link" type="submit">approve</button>
+            </form>
+            <form method="post" action="{{ url_for('engagement_savings_status', engagement_id=eng.id, opp_id=o.id) }}" class="inline-form">
+              <input type="hidden" name="status" value="proposed">
+              <button class="btn-link" type="submit">reset to proposed</button>
+            </form>
+            <form method="post" action="{{ url_for('engagement_savings_status', engagement_id=eng.id, opp_id=o.id) }}" class="inline-form">
+              <input type="hidden" name="status" value="rejected">
+              <button class="btn-link" type="submit">reject</button>
+            </form>
+            <form method="post" action="{{ url_for('engagement_savings_delete', engagement_id=eng.id, opp_id=o.id) }}" class="inline-form" onsubmit="return confirm('Delete this opportunity?');">
+              <button class="btn-link danger" type="submit">delete</button>
+            </form>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="panel">
+        <div class="empty">
+          No savings opportunities yet. Click <strong>Seed from Phase 5 + 7</strong> to auto-create them from earlier decisions, or add a custom one below.
+        </div>
+      </div>
+    {% endif %}
+
+    {# ----- Add custom opportunity ----- #}
+    <div class="panel" id="new-opportunity">
+      <h2>Add custom opportunity</h2>
+      <form method="post" action="{{ url_for('engagement_savings_new', engagement_id=eng.id) }}">
+        <div class="row">
+          <div class="col">
+            <label>Title</label>
+            <input type="text" name="title" placeholder="e.g. Consolidate analytics tools — Looker → Power BI" required>
+          </div>
+          <div class="col" style="flex: 0 0 200px;">
+            <label>Disposition</label>
+            <select name="disposition">
+              {% for k, l in disposition_choices %}
+                <option value="{{ k }}">{{ l }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Affected products</label>
+          <p class="helper">Hold Ctrl / Cmd to select multiple. Annual cost will auto-sum.</p>
+          <select name="product_ids" multiple size="8" style="height: auto;">
+            {% for p in products %}
+              <option value="{{ p.id }}">{{ p.product_name }}{% if p.vendor %} · {{ p.vendor }}{% endif %}{% if p.total_annual_cost %} — {{ p.total_annual_cost | money }}/yr{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Add opportunity</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Finalize Phase 8</h2>
+      <p class="helper">Lock the savings estimate once the opportunity list is approved. Phase 9 (Validate with Stakeholders) activates next.</p>
+      <form method="post" action="{{ url_for('engagement_savings_finalize', engagement_id=eng.id) }}">
+        {% if s.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 8</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 8</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

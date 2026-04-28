@@ -29,11 +29,13 @@
           <a href="{{ url_for('engagement_ai_review', engagement_id=eng.id) }}">{{ label }}</a>
         {% elif key == 'tech_debt' %}
           <a href="{{ url_for('engagement_tech_debt', engagement_id=eng.id) }}">{{ label }}</a>
+        {% elif key == 'savings' %}
+          <a href="{{ url_for('engagement_savings', engagement_id=eng.id) }}">{{ label }}</a>
         {% else %}
           <span style="opacity: 0.6;">{{ label }}</span>
         {% endif %}
       </li>
     {% endfor %}
   </ul>
-  <p class="helper" style="margin-top: 10px;">Phases 1 through 7 are live. Phases 8–11 are part of the playbook roadmap and will activate in future releases.</p>
+  <p class="helper" style="margin-top: 10px;">Phases 1 through 8 are live. Phases 9–11 are part of the playbook roadmap and will activate in future releases.</p>
 </aside>
