@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Define scope · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'scope' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 1 — Define the Scope</h1>
+      <p class="lead">Confirm what the customer wants reviewed. The output of this phase is the <strong>Software Review Scope Statement</strong> used as the baseline for every subsequent phase.</p>
+      {% set s = eng.scope %}
+      {% if s.finalized %}
+        <div class="notice">Scope finalized on {{ s.finalized_at[:10] }}. To make edits, reopen the scope below.</div>
+      {% endif %}
+
+      <form method="post">
+        <h2>Engagement objectives</h2>
+        <div class="field">
+          <label>What is the customer trying to accomplish?</label>
+          <div class="helper">Reduce overlap? Cut spend before renewal? Identify shadow IT? Capture the goals so later phases stay aligned.</div>
+          <textarea name="objectives" rows="3">{{ s.objectives or '' }}</textarea>
+        </div>
+
+        <h2>Business units in scope</h2>
+        <div class="field">
+          <label>Business units</label>
+          <div class="helper">One unit per line. Example:&nbsp; Finance · HR · Engineering · Operations</div>
+          <textarea name="business_units" rows="4">{{ '\n'.join(s.business_units or []) }}</textarea>
+        </div>
+
+        <h2>Tool categories in scope</h2>
+        <div class="field">
+          <label>Categories of software, services, and infrastructure to include</label>
+          <div class="helper">Select every category that should be reviewed in this engagement.</div>
+          <div class="checkbox-grid">
+            {% for key, label in tool_categories %}
+              <label class="checkbox">
+                <input type="checkbox" name="tool_categories" value="{{ key }}" {% if key in (s.tool_categories or []) %}checked{% endif %}>
+                <span>{{ label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <h2>Purchase sources in scope</h2>
+        <div class="field">
+          <div class="checkbox-grid">
+            <label class="checkbox"><input type="checkbox" name="include_corporate_card" {% if s.include_corporate_card %}checked{% endif %}><span>Corporate credit card purchases</span></label>
+            <label class="checkbox"><input type="checkbox" name="include_enterprise_agreements" {% if s.include_enterprise_agreements %}checked{% endif %}><span>Enterprise agreements</span></label>
+            <label class="checkbox"><input type="checkbox" name="include_department_purchases" {% if s.include_department_purchases %}checked{% endif %}><span>Department-level purchases</span></label>
+            <label class="checkbox"><input type="checkbox" name="include_shadow_it" {% if s.include_shadow_it %}checked{% endif %}><span>Shadow IT / non-IT purchases</span></label>
+          </div>
+        </div>
+
+        <h2>Renewal window</h2>
+        <div class="field">
+          <label>Which renewals are in scope?</label>
+          <div class="helper">Example:&nbsp; "Renewals due in the next 12 months" or "FY26 renewals only".</div>
+          <input type="text" name="renewal_window" value="{{ s.renewal_window or '' }}">
+        </div>
+
+        <h2>Owners</h2>
+        <p class="helper">For each owner type, list one person per line in this format:<br><code>Name | Role | email@example.com</code> &nbsp;(role and email optional)</p>
+        <div class="row">
+          <div class="col field">
+            <label>Contract owners</label>
+            <textarea name="contract_owners" rows="4" placeholder="Jane Doe | Procurement Manager | jane@acme.com">{{ owners_to_text(s.contract_owners) }}</textarea>
+          </div>
+          <div class="col field">
+            <label>Technical owners</label>
+            <textarea name="technical_owners" rows="4" placeholder="Sam Lee | IT Director | sam@acme.com">{{ owners_to_text(s.technical_owners) }}</textarea>
+          </div>
+          <div class="col field">
+            <label>Business owners</label>
+            <textarea name="business_owners" rows="4" placeholder="Pat Kim | VP Finance | pat@acme.com">{{ owners_to_text(s.business_owners) }}</textarea>
+          </div>
+        </div>
+
+        <h2>Out of scope &amp; constraints</h2>
+        <div class="row">
+          <div class="col field">
+            <label>Explicitly out of scope</label>
+            <div class="helper">Anything the customer has decided <em>not</em> to review.</div>
+            <textarea name="out_of_scope" rows="4">{{ s.out_of_scope or '' }}</textarea>
+          </div>
+          <div class="col field">
+            <label>Constraints &amp; assumptions</label>
+            <div class="helper">Timing windows, sensitivity restrictions, missing data sources, etc.</div>
+            <textarea name="constraints" rows="4">{{ s.constraints or '' }}</textarea>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Additional notes</label>
+          <textarea name="scope_notes" rows="3">{{ s.scope_notes or '' }}</textarea>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="submit" name="action" value="save">Save draft</button>
+          {% if s.finalized %}
+            <button class="btn secondary" type="submit" name="action" value="reopen">Reopen scope for edits</button>
+          {% else %}
+            <button class="btn" type="submit" name="action" value="finalize" style="background: var(--good); border-color: var(--good);">Finalize scope</button>
+          {% endif %}
+          <a class="btn secondary" href="{{ url_for('engagement_view', engagement_id=eng.id) }}">Back to overview</a>
+          {% if s.finalized %}
+            <a class="btn secondary" href="{{ url_for('scope_statement', engagement_id=eng.id) }}">View scope statement</a>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

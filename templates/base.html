@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Software Rationalization{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <a href="{{ url_for('home') }}" style="color: inherit; text-decoration: none;">Software Rationalization Workbench</a>
+      <span class="sub">Inventory · License Review · Technical Debt</span>
+    </div>
+    <div>
+      <a class="btn secondary" href="{{ url_for('engagement_new') }}">+ New engagement</a>
+    </div>
+  </div>
+  {% block body %}{% endblock %}
+</body>
+</html>

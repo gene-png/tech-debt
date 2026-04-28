@@ -1,0 +1,29 @@
+{# Phase navigation sidebar — expects: eng, phases, current_phase #}
+<aside class="sidebar">
+  <h3>Engagement</h3>
+  <div class="panel" style="padding: 14px 16px; margin-bottom: 16px;">
+    <div style="font-weight: 600;">{{ eng.name }}</div>
+    <div class="meta" style="color: var(--muted); font-size: 12px;">{{ eng.client }}</div>
+    {% if eng.lead %}<div class="meta" style="color: var(--muted); font-size: 12px;">Lead: {{ eng.lead }}</div>{% endif %}
+    <div style="margin-top: 8px;">
+      <a href="{{ url_for('engagement_view', engagement_id=eng.id) }}" style="font-size: 12px;">Overview</a>
+    </div>
+  </div>
+  <h3>Phases</h3>
+  <ul class="phase-list">
+    {% for key, label in phases %}
+      {% set st = eng.phase_progress.get(key, 'not_started') %}
+      <li class="{{ 'active' if current_phase == key else '' }}">
+        <span class="phase-dot {{ st | phase_status_class }}"></span>
+        {% if key == 'scope' %}
+          <a href="{{ url_for('engagement_scope', engagement_id=eng.id) }}">{{ label }}</a>
+        {% elif key == 'data_request' %}
+          <a href="{{ url_for('engagement_data_request', engagement_id=eng.id) }}">{{ label }}</a>
+        {% else %}
+          <span style="opacity: 0.6;">{{ label }}</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  <p class="helper" style="margin-top: 10px;">Phases 1 and 2 are live. Phases 3–11 are part of the playbook roadmap and will activate in future releases.</p>
+</aside>

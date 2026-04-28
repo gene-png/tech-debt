@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Engagements · Software Rationalization{% endblock %}
+{% block body %}
+<div class="layout">
+  <div class="main" style="max-width: 980px; margin: 0 auto;">
+    <div class="panel">
+      <h1>Engagements</h1>
+      <p class="lead">Each engagement walks a customer through the 11-phase Software Inventory, License Review, and Technical Debt Reduction playbook. Phase 1 (Define the Scope) is live.</p>
+      {% if engagements %}
+        <ul class="engagement-list">
+          {% for e in engagements %}
+            <li>
+              <div>
+                <div class="name"><a href="{{ url_for('engagement_view', engagement_id=e.id) }}">{{ e.name }}</a></div>
+                <div class="meta">{{ e.client }}{% if e.lead %} · Lead: {{ e.lead }}{% endif %} · created {{ e.created_at[:10] }}</div>
+              </div>
+              <div>
+                {% set scope_status = e.phase_progress.get('scope', 'not_started') %}
+                {% if scope_status == 'complete' %}
+                  <span class="tag" style="background: #e3f1e6; color: var(--good);">Scope finalized</span>
+                {% elif scope_status == 'in_progress' %}
+                  <span class="tag" style="background: #eff3fc; color: var(--accent-dark);">Scope in progress</span>
+                {% else %}
+                  <span class="tag">Not started</span>
+                {% endif %}
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="empty">
+          <p>No engagements yet.</p>
+          <a class="btn" href="{{ url_for('engagement_new') }}">Create your first engagement</a>
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h2>Playbook phases</h2>
+      <p class="helper">The end-to-end flow this workbench will support. Items marked Live are available now.</p>
+      <ul class="phase-list">
+        {% for key, label in phases %}
+          {% set is_live = key in ('scope', 'data_request') %}
+          <li>
+            <span class="phase-dot {{ 'status-progress' if is_live else 'status-pending' }}"></span>
+            <span>{{ label }}</span>
+            {% if is_live %}
+              <span class="tag cat" style="margin-left: auto;">Live</span>
+            {% else %}
+              <span class="tag" style="margin-left: auto;">Planned</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

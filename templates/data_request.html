@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Customer data request · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'data_request' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 2 — Request Customer Data</h1>
+      <p class="lead">Track the documents the customer needs to provide. Update status as items come in, upload files when received, and share the customer-facing checklist as a deliverable.</p>
+
+      {% set dr = eng.data_request %}
+      {% if not eng.scope.finalized %}
+        <div class="notice warn">Phase 1 (Define the Scope) has not been finalized. You can still gather data requests, but consider locking the scope baseline first.</div>
+      {% endif %}
+      {% if dr.finalized %}
+        <div class="notice">Phase 2 finalized on {{ dr.finalized_at[:10] }}. Reopen below to make changes.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile good"><div class="num">{{ summary.received }}</div><div class="lbl">Received</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.requested }}</div><div class="lbl">Outstanding</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.not_applicable }}</div><div class="lbl">N/A</div></div>
+        <div class="summary-tile danger"><div class="num">{{ summary.waived }}</div><div class="lbl">Waived</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.files_total }}</div><div class="lbl">File{{ '' if summary.files_total == 1 else 's' }}</div></div>
+      </div>
+
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('engagement_data_request_checklist', engagement_id=eng.id) }}">View customer-facing checklist</a>
+        <a class="btn secondary" href="{{ url_for('engagement_data_request_checklist_txt', engagement_id=eng.id) }}">Download .txt</a>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Customer message</h2>
+      <p class="helper">Optional note that appears at the top of the customer-facing checklist. Tell the customer what to send and how.</p>
+      <form method="post">
+        <input type="hidden" name="action" value="save_message">
+        <textarea name="customer_message" rows="3" placeholder="Please share any of the following you have on hand. The more we receive, the more accurate the review.">{{ dr.customer_message or '' }}</textarea>
+        <div class="actions"><button class="btn secondary" type="submit">Save message</button></div>
+      </form>
+    </div>
+
+    {% for d in dr.documents %}
+      <div class="panel" id="item-{{ d.id }}">
+        <div class="dr-item-header">
+          <h2 class="inline">{{ loop.index }}. {{ d.doc_type_label }}</h2>
+          {% set s = d.status %}
+          <span class="status-pill status-{{ s }}">
+            {% if s == 'received' %}Received
+            {% elif s == 'requested' %}Outstanding
+            {% elif s == 'not_applicable' %}N/A
+            {% elif s == 'waived' %}Waived
+            {% else %}{{ s }}{% endif %}
+          </span>
+        </div>
+
+        <form method="post">
+          <input type="hidden" name="action" value="update_item">
+          <input type="hidden" name="item_id" value="{{ d.id }}">
+          <div class="row">
+            <div class="col" style="flex: 0 0 180px;">
+              <label>Status</label>
+              <select name="status">
+                {% for sk, sl in statuses %}
+                  <option value="{{ sk }}" {% if d.status == sk %}selected{% endif %}>{{ sl }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col">
+              <label>Notes</label>
+              <input type="text" name="notes" value="{{ d.notes or '' }}" placeholder="e.g. requested via email Apr 28">
+            </div>
+            <div class="col" style="flex: 0 0 110px; align-self: end;">
+              <button class="btn secondary" type="submit">Update</button>
+            </div>
+          </div>
+        </form>
+
+        <h3 class="section-label">Files</h3>
+        {% if d.uploaded_files %}
+          <ul class="file-list">
+            {% for f in d.uploaded_files %}
+              <li>
+                <a href="{{ url_for('engagement_data_request_download', engagement_id=eng.id, item_id=d.id, file_id=f.id) }}">{{ f.original_filename }}</a>
+                <span class="meta">{{ f.size_bytes | format_bytes }} · uploaded {{ f.uploaded_at[:10] }}</span>
+                <form method="post" action="{{ url_for('engagement_data_request_delete_file', engagement_id=eng.id, item_id=d.id, file_id=f.id) }}" class="inline-form" onsubmit="return confirm('Delete this file?');">
+                  <button class="btn-link danger" type="submit">delete</button>
+                </form>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="helper">No files uploaded yet.</p>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('engagement_data_request_upload', engagement_id=eng.id, item_id=d.id) }}" enctype="multipart/form-data">
+          <div class="row">
+            <div class="col">
+              <input type="file" name="file" multiple>
+            </div>
+            <div class="col" style="flex: 0 0 110px;">
+              <button class="btn" type="submit">Upload</button>
+            </div>
+          </div>
+          <p class="helper">Max 50&nbsp;MB per request. Allowed: PDF, CSV, XLSX, DOCX, TXT, PNG, JPG, JSON, XML, ZIP, PPTX.</p>
+        </form>
+      </div>
+    {% endfor %}
+
+    <div class="panel">
+      <h2>Finalize Phase 2</h2>
+      <p class="helper">Lock the data request once you've gathered everything you need. Phase 3 (Build Inventory) will activate when finalized. You can reopen later.</p>
+      <form method="post">
+        {% if dr.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 2</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 2</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

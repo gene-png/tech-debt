@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}New engagement{% endblock %}
+{% block body %}
+<div class="layout">
+  <div class="main" style="max-width: 720px; margin: 0 auto;">
+    <div class="panel">
+      <h1>New engagement</h1>
+      <p class="lead">Create a workspace for a customer's software rationalization review. You can edit any of these later.</p>
+      {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+      <form method="post">
+        <div class="field">
+          <label>Engagement name</label>
+          <div class="helper">A short label for the engagement. Example: "Acme Q2 Software Review".</div>
+          <input type="text" name="name" value="{{ form.name or '' }}" required>
+        </div>
+        <div class="field">
+          <label>Client / organization</label>
+          <input type="text" name="client" value="{{ form.client or '' }}" required>
+        </div>
+        <div class="field">
+          <label>Lead consultant</label>
+          <div class="helper">Optional. The person leading the engagement on your team.</div>
+          <input type="text" name="lead" value="{{ form.lead or '' }}">
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Create engagement</button>
+          <a class="btn secondary" href="{{ url_for('home') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

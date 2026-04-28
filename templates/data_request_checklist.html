@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Data request checklist · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_data_request', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_data_request_checklist_txt', engagement_id=eng.id) }}">Download .txt</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+{% set dr = eng.data_request %}
+<article class="statement">
+  <h1>Customer Data Request Checklist</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}
+  </div>
+
+  {% if dr.customer_message %}
+    <h2>Message from your engagement team</h2>
+    <p>{{ dr.customer_message }}</p>
+  {% else %}
+    <h2>How to use this checklist</h2>
+    <p>Please share any of the following documents that your organization has on hand. The more information provided, the more accurate the review will be. Items marked <em>N/A</em> or <em>Waived</em> have already been agreed as out of scope or unavailable.</p>
+  {% endif %}
+
+  <h2>Requested documents</h2>
+  <table class="checklist-table">
+    <thead><tr><th style="width: 36px;">#</th><th>Document type</th><th style="width: 120px;">Status</th><th>Notes</th></tr></thead>
+    <tbody>
+      {% for d in dr.documents %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ d.doc_type_label }}</td>
+          <td>
+            {% if d.status == 'received' %}<span class="status-pill status-received">Received</span>
+            {% elif d.status == 'requested' %}<span class="status-pill status-requested">Outstanding</span>
+            {% elif d.status == 'not_applicable' %}<span class="status-pill status-not_applicable">N/A</span>
+            {% elif d.status == 'waived' %}<span class="status-pill status-waived">Waived</span>
+            {% endif %}
+          </td>
+          <td>{{ d.notes }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}

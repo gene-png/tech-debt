@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Scope statement · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_scope', engagement_id=eng.id) }}">← Back to scope</a>
+  <a class="btn secondary" href="{{ url_for('scope_statement_txt', engagement_id=eng.id) }}">Download .txt</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+{% set s = eng.scope %}
+<article class="statement">
+  <h1>Software Review Scope Statement</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Created {{ eng.created_at[:10] }}{% if s.finalized_at %} · Finalized {{ s.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Objectives</h2>
+  <p>{{ s.objectives or "Not provided." }}</p>
+
+  <h2>Business units in scope</h2>
+  {% if s.business_units %}
+    <ul>{% for bu in s.business_units %}<li>{{ bu }}</li>{% endfor %}</ul>
+  {% else %}<p>None listed.</p>{% endif %}
+
+  <h2>Tool categories in scope</h2>
+  {% if s.tool_categories %}
+    <p>{% for k in s.tool_categories %}<span class="tag cat">{{ cat_lookup.get(k, k) }}</span>{% endfor %}</p>
+  {% else %}<p>None selected.</p>{% endif %}
+
+  <h2>Purchase sources in scope</h2>
+  <ul>
+    <li>Corporate credit card purchases — <strong>{{ "Included" if s.include_corporate_card else "Excluded" }}</strong></li>
+    <li>Enterprise agreements — <strong>{{ "Included" if s.include_enterprise_agreements else "Excluded" }}</strong></li>
+    <li>Department-level purchases — <strong>{{ "Included" if s.include_department_purchases else "Excluded" }}</strong></li>
+    <li>Shadow IT / non-IT purchases — <strong>{{ "Included" if s.include_shadow_it else "Excluded" }}</strong></li>
+  </ul>
+
+  <h2>Renewal window</h2>
+  <p>{{ s.renewal_window or "Not specified." }}</p>
+
+  <h2>Contract owners</h2>
+  {% if s.contract_owners %}
+    {% for p in s.contract_owners %}
+      <div class="person"><strong>{{ p.name }}</strong>{% if p.role %} — {{ p.role }}{% endif %}{% if p.email %} · {{ p.email }}{% endif %}</div>
+    {% endfor %}
+  {% else %}<p>None listed.</p>{% endif %}
+
+  <h2>Technical owners</h2>
+  {% if s.technical_owners %}
+    {% for p in s.technical_owners %}
+      <div class="person"><strong>{{ p.name }}</strong>{% if p.role %} — {{ p.role }}{% endif %}{% if p.email %} · {{ p.email }}{% endif %}</div>
+    {% endfor %}
+  {% else %}<p>None listed.</p>{% endif %}
+
+  <h2>Business owners</h2>
+  {% if s.business_owners %}
+    {% for p in s.business_owners %}
+      <div class="person"><strong>{{ p.name }}</strong>{% if p.role %} — {{ p.role }}{% endif %}{% if p.email %} · {{ p.email }}{% endif %}</div>
+    {% endfor %}
+  {% else %}<p>None listed.</p>{% endif %}
+
+  <h2>Out of scope</h2>
+  <p>{{ s.out_of_scope or "Not specified." }}</p>
+
+  <h2>Constraints &amp; assumptions</h2>
+  <p>{{ s.constraints or "Not specified." }}</p>
+
+  {% if s.scope_notes %}
+    <h2>Additional notes</h2>
+    <p>{{ s.scope_notes }}</p>
+  {% endif %}
+</article>
+{% endblock %}

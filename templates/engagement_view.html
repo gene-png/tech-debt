@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}{{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = '' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>{{ eng.name }}</h1>
+      <p class="lead">{{ eng.client }}{% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}</p>
+
+      <dl class="kv">
+        <dt>Engagement ID</dt><dd><code>{{ eng.id }}</code></dd>
+        <dt>Created</dt><dd>{{ eng.created_at }}</dd>
+        <dt>Last updated</dt><dd>{{ eng.updated_at }}</dd>
+        <dt>Current phase</dt><dd>{{ eng.status | phase_label }}</dd>
+      </dl>
+    </div>
+
+    <div class="panel">
+      <h2>Phase 1 — Define the Scope</h2>
+      {% set s = eng.scope %}
+      {% if s.finalized %}
+        <div class="notice">Scope finalized on {{ s.finalized_at[:10] }}. You can reopen the scope to make edits.</div>
+      {% elif eng.phase_progress.scope == 'in_progress' %}
+        <div class="notice warn">Scope is being drafted. Finalize when ready to lock it as the engagement baseline.</div>
+      {% else %}
+        <div class="notice warn">Scope has not been started.</div>
+      {% endif %}
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_scope', engagement_id=eng.id) }}">
+          {% if s.finalized %}Review scope{% else %}Edit scope{% endif %}
+        </a>
+        {% if s.finalized %}
+          <a class="btn secondary" href="{{ url_for('scope_statement', engagement_id=eng.id) }}">View scope statement</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Phase 2 — Request Customer Data</h2>
+      {% set dr = eng.get('data_request') %}
+      {% if dr and dr.finalized %}
+        <div class="notice">Phase 2 finalized on {{ dr.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.data_request == 'in_progress' %}
+        <div class="notice warn">Data request is in progress.</div>
+      {% else %}
+        <div class="notice warn">Data request has not been started.</div>
+      {% endif %}
+      {% if dr %}
+        {% set received = dr.documents | selectattr('status', 'equalto', 'received') | list | length %}
+        {% set total = dr.documents | length %}
+        {% set ns = namespace(files=0) %}
+        {% for d in dr.documents %}{% set ns.files = ns.files + (d.uploaded_files | length) %}{% endfor %}
+        <p class="helper">{{ received }} of {{ total }} document types received · {{ ns.files }} file(s) uploaded.</p>
+      {% endif %}
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_data_request', engagement_id=eng.id) }}">
+          {% if dr and dr.finalized %}Review data request{% else %}Manage data request{% endif %}
+        </a>
+        {% if dr %}
+          <a class="btn secondary" href="{{ url_for('engagement_data_request_checklist', engagement_id=eng.id) }}">View customer-facing checklist</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>What's next</h2>
+      <p class="helper">Phases 3 through 11 of the playbook will activate in upcoming releases — Inventory Build, Normalization, Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <ul class="phase-list">
+        {% for key, label in phases %}
+          {% if key not in ('scope', 'data_request') %}
+            <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}
