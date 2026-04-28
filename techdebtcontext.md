@@ -23,7 +23,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `0eef907` (2026-04-27) — Documented GitHub sync workflow in this context file.
 - `98d0bed` (2026-04-27) — Phase 3: Build the Software Inventory (10 files changed, +1097 lines).
 - `0adbac0` (2026-04-27) — Refresh techdebtcontext.md to post-Phase-3 state.
-- *(2026-04-28) Phase 4 build pending push.*
+- `fd36790` (2026-04-28) — Phase 4: Normalize the Data (7 files changed, +816 lines).
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
