@@ -87,11 +87,29 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 4 — Normalize the Data</h2>
+      {% set norm = eng.get('normalize') %}
+      {% if norm and norm.finalized %}
+        <div class="notice">Phase 4 finalized on {{ norm.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.normalize == 'in_progress' %}
+        <div class="notice warn">Normalization is in progress.</div>
+      {% else %}
+        <div class="notice warn">Normalization has not been started.</div>
+      {% endif %}
+      <p class="helper">Detects duplicates, vendor name variants, unmapped categories, missing ownership/cost, and license-math anomalies, then offers one-click fixes.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_normalize', engagement_id=eng.id) }}">
+          {% if norm and norm.finalized %}Review normalization{% else %}Open normalize workspace{% endif %}
+        </a>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 4 through 11 of the playbook will activate in upcoming releases — Normalization, Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 5 through 11 of the playbook will activate in upcoming releases — Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

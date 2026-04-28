@@ -1,4 +1,5 @@
 import csv
+import difflib
 import io
 import os
 import uuid
@@ -1121,6 +1122,385 @@ def format_bytes(n):
             return f"{int(n)} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — Normalize the Data
+# ---------------------------------------------------------------------------
+
+
+def _ensure_normalize(eng):
+    if "normalize" in eng and "ignored_issues" in eng["normalize"]:
+        return False
+    eng["normalize"] = {
+        "ignored_issues": {},  # issue_id -> {"ignored_at": iso, "reason": str}
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _norm_text(s):
+    return (s or "").strip().lower().replace("  ", " ")
+
+
+_VENDOR_SUFFIXES = (
+    " incorporated", " corporation", " technologies", " technology",
+    ", inc", ", inc.", " inc.", " inc",
+    ", corp", ", corp.", " corp.", " corp",
+    " llc", " l.l.c.", " ltd.", " ltd",
+    " gmbh", " plc", " ag", " sa", " spa", " bv", " nv",
+    " co.", " co",
+    " (us)", " (uk)", " (eu)",
+)
+
+
+def _norm_vendor(s):
+    """Aggressive vendor normalization: lowercase, trim corporate suffixes & punctuation."""
+    s = _norm_text(s)
+    if not s:
+        return ""
+    changed = True
+    while changed:
+        changed = False
+        for sfx in _VENDOR_SUFFIXES:
+            if s.endswith(sfx):
+                s = s[:-len(sfx)].rstrip(", ")
+                changed = True
+    return s.strip().rstrip(",.")
+
+
+def detect_duplicates(products):
+    """Group products with same normalized (name, vendor); return clusters of 2+."""
+    groups = {}
+    for p in products:
+        name = _norm_text(p.get("product_name"))
+        vendor = _norm_text(p.get("vendor"))
+        if not name:
+            continue
+        groups.setdefault((name, vendor), []).append(p)
+    out = []
+    for (name, vendor), members in groups.items():
+        if len(members) >= 2:
+            ids = sorted(m["id"] for m in members)
+            issue_id = "dup:" + ":".join(ids)
+            out.append({
+                "issue_id": issue_id,
+                "label": members[0].get("product_name") + (f" — {members[0].get('vendor')}" if members[0].get("vendor") else ""),
+                "members": members,
+            })
+    return out
+
+
+def detect_vendor_variants(products, threshold=0.85):
+    """
+    Two passes:
+      1. Group by aggressively-normalized vendor (suffix-stripped). Anything
+         with 2+ raw spellings under one normalized key is a cluster.
+      2. difflib over the remaining single-spelling normalized vendors to catch
+         typos (e.g. "Atlasian" vs "Atlassian").
+    """
+    norm_to_originals = {}      # vendor_norm (suffix-stripped) -> set of raw vendor strings
+    norm_to_text_norms = {}     # vendor_norm -> set of plain text-norm strings (for cluster_norms)
+    for p in products:
+        raw = p.get("vendor")
+        if not raw:
+            continue
+        vn = _norm_vendor(raw)
+        if not vn:
+            continue
+        norm_to_originals.setdefault(vn, set()).add(raw)
+        norm_to_text_norms.setdefault(vn, set()).add(_norm_text(raw))
+
+    clusters = []
+    handled_text_norms = set()
+
+    # pass 1: same suffix-stripped vendor, multiple spellings
+    for vn, originals in norm_to_originals.items():
+        if len(originals) >= 2:
+            text_norms = sorted(norm_to_text_norms[vn])
+            handled_text_norms.update(text_norms)
+            cluster = _build_vendor_cluster(products, sorted(originals), text_norms)
+            clusters.append(cluster)
+
+    # pass 2: difflib over the suffix-stripped names (catches typos)
+    remaining = [vn for vn, origs in norm_to_originals.items() if len(origs) == 1]
+    seen = set()
+    for v in remaining:
+        if v in seen:
+            continue
+        matches = difflib.get_close_matches(v, remaining, n=10, cutoff=threshold)
+        matches = [m for m in matches if m != v]
+        if matches:
+            group = sorted(set([v] + matches))
+            seen.update(group)
+            originals = sorted({orig for vn in group for orig in norm_to_originals[vn]})
+            text_norms = sorted({tn for vn in group for tn in norm_to_text_norms[vn]})
+            if any(tn in handled_text_norms for tn in text_norms):
+                continue
+            handled_text_norms.update(text_norms)
+            clusters.append(_build_vendor_cluster(products, originals, text_norms))
+
+    return clusters
+
+
+def _build_vendor_cluster(products, originals, cluster_norms):
+    counts = {}
+    affected = []
+    for p in products:
+        if _norm_text(p.get("vendor")) in cluster_norms:
+            counts[p["vendor"]] = counts.get(p["vendor"], 0) + 1
+            affected.append(p)
+    canonical = max(counts.items(), key=lambda kv: (kv[1], len(kv[0])))[0] if counts else originals[0]
+    return {
+        "issue_id": "vv:" + "|".join(sorted(cluster_norms)),
+        "variants": originals,
+        "canonical_suggested": canonical,
+        "affected_count": len(affected),
+        "affected_products": affected,
+        "cluster_norms": sorted(cluster_norms),
+    }
+
+
+def detect_unmapped_categories(products):
+    """Categories that don't match PRODUCT_CATEGORIES (typos / customer-supplied)."""
+    valid = set(PRODUCT_CATEGORIES)
+    out = {}
+    for p in products:
+        cat = (p.get("category") or "").strip()
+        if cat and cat not in valid:
+            out.setdefault(cat, []).append(p)
+    items = []
+    for cat, members in out.items():
+        # propose closest valid category
+        suggestions = difflib.get_close_matches(cat, PRODUCT_CATEGORIES, n=1, cutoff=0.6)
+        items.append({
+            "issue_id": f"cv:{cat}",
+            "category": cat,
+            "members": members,
+            "suggested": suggestions[0] if suggestions else "",
+        })
+    return items
+
+
+def detect_missing_owners(products):
+    out = []
+    for p in products:
+        missing = []
+        if not (p.get("business_owner") or "").strip():
+            missing.append("business")
+        if not (p.get("technical_owner") or "").strip():
+            missing.append("technical")
+        if not (p.get("contract_owner") or "").strip():
+            missing.append("contract")
+        if missing:
+            out.append({
+                "issue_id": f"mo:{p['id']}:{','.join(missing)}",
+                "product": p,
+                "missing": missing,
+            })
+    return out
+
+
+def detect_missing_cost(products):
+    out = []
+    for p in products:
+        if not (p.get("total_annual_cost") or p.get("cost_per_license")):
+            out.append({"issue_id": f"mc:{p['id']}", "product": p})
+    return out
+
+
+def detect_uncategorized(products):
+    out = []
+    for p in products:
+        cat = (p.get("category") or "").strip()
+        if not cat:
+            out.append({"issue_id": f"uc:{p['id']}", "product": p})
+    return out
+
+
+def detect_unclear_use(products):
+    out = []
+    for p in products:
+        if not (p.get("primary_use_case") or "").strip():
+            out.append({"issue_id": f"mu:{p['id']}", "product": p})
+    return out
+
+
+def detect_license_anomalies(products):
+    out = []
+    for p in products:
+        def to_int(v):
+            try:
+                return int(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+        purch = to_int(p.get("licenses_purchased"))
+        asgn = to_int(p.get("licenses_assigned"))
+        users = to_int(p.get("active_users"))
+        if purch is not None and asgn is not None and asgn > purch:
+            out.append({
+                "issue_id": f"la:{p['id']}:assigned_over_purchased",
+                "product": p,
+                "type": "Assigned exceeds purchased",
+                "detail": f"{asgn} assigned vs {purch} purchased",
+            })
+        if asgn is not None and users is not None and users > asgn:
+            out.append({
+                "issue_id": f"la:{p['id']}:users_over_assigned",
+                "product": p,
+                "type": "Active users exceed assigned licenses",
+                "detail": f"{users} active users vs {asgn} assigned",
+            })
+    return out
+
+
+def collect_normalize_findings(eng):
+    """Run all detectors. Filter out ignored issues. Return a structured report."""
+    products = eng.get("inventory", {}).get("products", [])
+    ignored = eng.get("normalize", {}).get("ignored_issues", {})
+
+    def keep(issues):
+        return [i for i in issues if i["issue_id"] not in ignored]
+
+    findings = {
+        "duplicates": keep(detect_duplicates(products)),
+        "vendor_variants": keep(detect_vendor_variants(products)),
+        "unmapped_categories": keep(detect_unmapped_categories(products)),
+        "uncategorized": keep(detect_uncategorized(products)),
+        "missing_owners": keep(detect_missing_owners(products)),
+        "missing_cost": keep(detect_missing_cost(products)),
+        "unclear_use": keep(detect_unclear_use(products)),
+        "license_anomalies": keep(detect_license_anomalies(products)),
+    }
+    findings["total_open"] = sum(len(v) for k, v in findings.items() if k != "total_open")
+    findings["ignored_count"] = len(ignored)
+    return findings
+
+
+@app.route("/engagements/<engagement_id>/normalize")
+def engagement_normalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_normalize(eng):
+        if (eng["phase_progress"].get("inventory") == "complete"
+                and eng["phase_progress"].get("normalize") == "not_started"):
+            eng["phase_progress"]["normalize"] = "in_progress"
+        storage.save_engagement(eng)
+    findings = collect_normalize_findings(eng)
+    return render_template(
+        "normalize.html",
+        eng=eng,
+        findings=findings,
+        categories=PRODUCT_CATEGORIES,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/normalize/apply-vendor", methods=["POST"])
+def engagement_normalize_apply_vendor(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_normalize(eng)
+    cluster_norms_csv = request.form.get("cluster_norms", "")
+    canonical = request.form.get("canonical", "").strip()
+    if not canonical or not cluster_norms_csv:
+        return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+    cluster_norms = set(filter(None, cluster_norms_csv.split("|")))
+    changed = 0
+    now = datetime.utcnow().isoformat() + "Z"
+    for p in eng["inventory"]["products"]:
+        if _norm_text(p.get("vendor")) in cluster_norms and p.get("vendor") != canonical:
+            p["vendor"] = canonical
+            p["updated_at"] = now
+            changed += 1
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/normalize/apply-category", methods=["POST"])
+def engagement_normalize_apply_category(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_normalize(eng)
+    old_category = request.form.get("old_category", "").strip()
+    new_category = request.form.get("new_category", "").strip()
+    if not old_category or not new_category:
+        return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+    if new_category not in PRODUCT_CATEGORIES:
+        # allow free-text; just trust the user
+        pass
+    now = datetime.utcnow().isoformat() + "Z"
+    for p in eng["inventory"]["products"]:
+        if (p.get("category") or "").strip() == old_category:
+            p["category"] = new_category
+            p["updated_at"] = now
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/normalize/merge-duplicates", methods=["POST"])
+def engagement_normalize_merge_duplicates(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_normalize(eng)
+    keep_id = request.form.get("keep_id", "").strip()
+    delete_ids_csv = request.form.get("delete_ids", "")
+    delete_ids = set(filter(None, delete_ids_csv.split(",")))
+    if not keep_id or not delete_ids:
+        return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+    eng["inventory"]["products"] = [p for p in eng["inventory"]["products"] if p["id"] not in delete_ids]
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/normalize/ignore", methods=["POST"])
+def engagement_normalize_ignore(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_normalize(eng)
+    issue_id = request.form.get("issue_id", "").strip()
+    reason = request.form.get("reason", "").strip()
+    action = request.form.get("action", "ignore")
+    if not issue_id:
+        return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+    if action == "unignore":
+        eng["normalize"]["ignored_issues"].pop(issue_id, None)
+    else:
+        eng["normalize"]["ignored_issues"][issue_id] = {
+            "ignored_at": datetime.utcnow().isoformat() + "Z",
+            "reason": reason,
+        }
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/normalize/finalize", methods=["POST"])
+def engagement_normalize_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_normalize(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["normalize"]["finalized"] = False
+        eng["normalize"]["finalized_at"] = None
+        eng["phase_progress"]["normalize"] = "in_progress"
+        eng["status"] = "normalize"
+    else:
+        eng["normalize"]["finalized"] = True
+        eng["normalize"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["normalize"] = "complete"
+        eng["status"] = "overlap"
+        if eng["phase_progress"].get("overlap") == "not_started":
+            eng["phase_progress"]["overlap"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
 
 
 @app.template_filter("money")

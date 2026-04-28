@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %}Normalize · {{ eng.name }}{% endblock %}
+{% macro ignore_form(issue_id) -%}
+  <form method="post" action="{{ url_for('engagement_normalize_ignore', engagement_id=eng.id) }}" class="inline-form">
+    <input type="hidden" name="issue_id" value="{{ issue_id }}">
+    <button class="btn-link" type="submit" title="Mark this finding as reviewed; it'll stop showing up.">ignore</button>
+  </form>
+{%- endmacro %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'normalize' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 4 — Normalize the Data</h1>
+      <p class="lead">Clean up the inventory so products can be compared properly. The detectors below run live every time you load this page — fix an issue elsewhere and it disappears here. Use <strong>ignore</strong> on findings you've reviewed and intentionally kept.</p>
+
+      {% set norm = eng.normalize %}
+      {% if norm.finalized %}
+        <div class="notice">Phase 4 finalized on {{ norm.finalized_at[:10] }}. Reopen below to keep cleaning.</div>
+      {% endif %}
+      {% if not eng.inventory or not eng.inventory.products %}
+        <div class="notice warn">The inventory is empty. <a href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Build the inventory in Phase 3</a> before normalizing.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile {% if findings.total_open == 0 %}good{% endif %}">
+          <div class="num">{{ findings.total_open }}</div><div class="lbl">Open findings</div>
+        </div>
+        <div class="summary-tile danger"><div class="num">{{ findings.duplicates | length }}</div><div class="lbl">Duplicates</div></div>
+        <div class="summary-tile"><div class="num">{{ findings.vendor_variants | length }}</div><div class="lbl">Vendor variants</div></div>
+        <div class="summary-tile"><div class="num">{{ findings.unmapped_categories | length + findings.uncategorized | length }}</div><div class="lbl">Category issues</div></div>
+        <div class="summary-tile"><div class="num">{{ findings.missing_owners | length + findings.missing_cost | length + findings.unclear_use | length }}</div><div class="lbl">Missing data</div></div>
+        <div class="summary-tile danger"><div class="num">{{ findings.license_anomalies | length }}</div><div class="lbl">License math</div></div>
+        <div class="summary-tile muted"><div class="num">{{ findings.ignored_count }}</div><div class="lbl">Ignored</div></div>
+      </div>
+    </div>
+
+    {# ------- Duplicates ------- #}
+    <div class="panel">
+      <h2>Duplicates</h2>
+      <p class="helper">Products with the same product name + vendor (case-insensitive). Pick the row to keep, then merge.</p>
+      {% if findings.duplicates %}
+        {% for cluster in findings.duplicates %}
+          <div class="finding">
+            <div class="finding-header">
+              <strong>{{ cluster.label }}</strong> — {{ cluster.members | length }} matching rows
+              <span style="margin-left: auto;">{{ ignore_form(cluster.issue_id) }}</span>
+            </div>
+            <form method="post" action="{{ url_for('engagement_normalize_merge_duplicates', engagement_id=eng.id) }}" class="merge-form" onsubmit="return confirm('Delete the unselected rows and keep the chosen one?');">
+              <table class="finding-table">
+                <thead><tr><th>Keep</th><th>Product</th><th>Vendor</th><th>Category</th><th>Lic. purch.</th><th>Annual cost</th><th>Renewal</th><th>Edit</th></tr></thead>
+                <tbody>
+                  {% for m in cluster.members %}
+                    <tr>
+                      <td><input type="radio" name="keep_id" value="{{ m.id }}" {% if loop.first %}checked{% endif %} required></td>
+                      <td>{{ m.product_name }}{% if m.version %} <span class="meta">{{ m.version }}</span>{% endif %}</td>
+                      <td>{{ m.vendor }}</td>
+                      <td>{{ m.category }}</td>
+                      <td class="num">{{ m.licenses_purchased }}</td>
+                      <td class="num">{{ m.total_annual_cost | money }}</td>
+                      <td>{{ m.renewal_date }}</td>
+                      <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=m.id) }}">edit</a></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+              <input type="hidden" name="delete_ids" value="{{ cluster.members | map(attribute='id') | join(',') }}">
+              <div class="actions">
+                <button class="btn" type="submit">Merge — keep selected, delete others</button>
+              </div>
+            </form>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="helper">No duplicates detected.</p>
+      {% endif %}
+    </div>
+
+    {# ------- Vendor variants ------- #}
+    <div class="panel">
+      <h2>Vendor name variants</h2>
+      <p class="helper">Vendors with similar names (e.g. "Microsoft" vs "Microsoft Corp"). Choose a canonical name and apply to standardize all rows in the cluster.</p>
+      {% if findings.vendor_variants %}
+        {% for cluster in findings.vendor_variants %}
+          <div class="finding">
+            <div class="finding-header">
+              <strong>{{ cluster.variants | join(' · ') }}</strong>
+              <span class="meta" style="margin-left: 12px;">{{ cluster.affected_count }} row(s)</span>
+              <span style="margin-left: auto;">{{ ignore_form(cluster.issue_id) }}</span>
+            </div>
+            <form method="post" action="{{ url_for('engagement_normalize_apply_vendor', engagement_id=eng.id) }}">
+              <input type="hidden" name="cluster_norms" value="{{ cluster.cluster_norms | join('|') }}">
+              <div class="row">
+                <div class="col">
+                  <label>Canonical vendor name</label>
+                  <input type="text" name="canonical" value="{{ cluster.canonical_suggested }}" required>
+                </div>
+                <div class="col" style="flex: 0 0 130px; align-self: end;">
+                  <button class="btn secondary" type="submit">Apply</button>
+                </div>
+              </div>
+              <p class="helper">Affected products: {% for p in cluster.affected_products %}<a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">{{ p.product_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+            </form>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="helper">No vendor name variants detected.</p>
+      {% endif %}
+    </div>
+
+    {# ------- Unmapped categories ------- #}
+    <div class="panel">
+      <h2>Categories outside the standard list</h2>
+      <p class="helper">Custom or free-text categories that don't match the playbook list. Map them to a standard category to keep groupings consistent.</p>
+      {% if findings.unmapped_categories %}
+        {% for issue in findings.unmapped_categories %}
+          <div class="finding">
+            <div class="finding-header">
+              <strong>{{ issue.category }}</strong>
+              <span class="meta" style="margin-left: 12px;">{{ issue.members | length }} product(s)</span>
+              <span style="margin-left: auto;">{{ ignore_form(issue.issue_id) }}</span>
+            </div>
+            <form method="post" action="{{ url_for('engagement_normalize_apply_category', engagement_id=eng.id) }}">
+              <input type="hidden" name="old_category" value="{{ issue.category }}">
+              <div class="row">
+                <div class="col">
+                  <label>Map to standard category</label>
+                  <select name="new_category" required>
+                    <option value="">— select —</option>
+                    {% for c in categories %}
+                      <option value="{{ c }}" {% if c == issue.suggested %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col" style="flex: 0 0 130px; align-self: end;">
+                  <button class="btn secondary" type="submit">Apply</button>
+                </div>
+              </div>
+              <p class="helper">Products: {% for p in issue.members %}<a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">{{ p.product_name }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+            </form>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="helper">All categories use the standard list.</p>
+      {% endif %}
+    </div>
+
+    {# ------- License anomalies ------- #}
+    <div class="panel">
+      <h2>License math anomalies</h2>
+      <p class="helper">Products where the license counts don't add up — assigned exceeds purchased, or active users exceed assigned licenses.</p>
+      {% if findings.license_anomalies %}
+        <table class="finding-table">
+          <thead><tr><th>Product</th><th>Issue</th><th>Detail</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for f in findings.license_anomalies %}
+              <tr>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">{{ f.product.product_name }}</a></td>
+                <td>{{ f.type }}</td>
+                <td>{{ f.detail }}</td>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">edit</a></td>
+                <td>{{ ignore_form(f.issue_id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="helper">License counts look consistent.</p>
+      {% endif %}
+    </div>
+
+    {# ------- Missing data ------- #}
+    <div class="panel">
+      <h2>Missing data</h2>
+      <p class="helper">Required-for-analysis fields that are still blank. Click <em>edit</em> to fill them in, or <em>ignore</em> if the gap is intentional.</p>
+
+      <h3 class="section-label">Missing ownership ({{ findings.missing_owners | length }})</h3>
+      {% if findings.missing_owners %}
+        <table class="finding-table">
+          <thead><tr><th>Product</th><th>Vendor</th><th>Missing</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for f in findings.missing_owners %}
+              <tr>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">{{ f.product.product_name }}</a></td>
+                <td>{{ f.product.vendor }}</td>
+                <td>
+                  {% for m in f.missing %}<span class="tag">{{ m }}</span>{% endfor %}
+                </td>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">edit</a></td>
+                <td>{{ ignore_form(f.issue_id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="helper">All products have business / technical / contract owners assigned.</p>
+      {% endif %}
+
+      <h3 class="section-label">Missing cost ({{ findings.missing_cost | length }})</h3>
+      {% if findings.missing_cost %}
+        <table class="finding-table">
+          <thead><tr><th>Product</th><th>Vendor</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for f in findings.missing_cost %}
+              <tr>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">{{ f.product.product_name }}</a></td>
+                <td>{{ f.product.vendor }}</td>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">edit</a></td>
+                <td>{{ ignore_form(f.issue_id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="helper">All products have at least cost-per-license or total-annual-cost.</p>
+      {% endif %}
+
+      <h3 class="section-label">Uncategorized ({{ findings.uncategorized | length }})</h3>
+      {% if findings.uncategorized %}
+        <table class="finding-table">
+          <thead><tr><th>Product</th><th>Vendor</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for f in findings.uncategorized %}
+              <tr>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">{{ f.product.product_name }}</a></td>
+                <td>{{ f.product.vendor }}</td>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">edit</a></td>
+                <td>{{ ignore_form(f.issue_id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="helper">All products have a category assigned.</p>
+      {% endif %}
+
+      <h3 class="section-label">Unclear primary use case ({{ findings.unclear_use | length }})</h3>
+      {% if findings.unclear_use %}
+        <table class="finding-table">
+          <thead><tr><th>Product</th><th>Vendor</th><th></th><th></th></tr></thead>
+          <tbody>
+            {% for f in findings.unclear_use %}
+              <tr>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">{{ f.product.product_name }}</a></td>
+                <td>{{ f.product.vendor }}</td>
+                <td><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=f.product.id) }}">edit</a></td>
+                <td>{{ ignore_form(f.issue_id) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="helper">All products have a primary use case captured.</p>
+      {% endif %}
+    </div>
+
+    {# ------- Ignored ------- #}
+    {% if norm.ignored_issues %}
+      <div class="panel">
+        <h2>Ignored findings</h2>
+        <p class="helper">These have been marked reviewed. They won't show up in the sections above. Un-ignore here if circumstances change.</p>
+        <table class="finding-table">
+          <thead><tr><th>Issue ID</th><th>Ignored at</th><th>Reason</th><th></th></tr></thead>
+          <tbody>
+            {% for iid, meta in norm.ignored_issues.items() %}
+              <tr>
+                <td><code>{{ iid }}</code></td>
+                <td>{{ meta.ignored_at[:10] }}</td>
+                <td>{{ meta.reason }}</td>
+                <td>
+                  <form method="post" action="{{ url_for('engagement_normalize_ignore', engagement_id=eng.id) }}" class="inline-form">
+                    <input type="hidden" name="issue_id" value="{{ iid }}">
+                    <input type="hidden" name="action" value="unignore">
+                    <button class="btn-link" type="submit">un-ignore</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+
+    <div class="panel">
+      <h2>Finalize Phase 4</h2>
+      <p class="helper">When the inventory is clean (or every remaining finding is consciously ignored), finalize Phase 4. Phase 5 (Identify Overlap) activates next.</p>
+      <form method="post" action="{{ url_for('engagement_normalize_finalize', engagement_id=eng.id) }}">
+        {% if norm.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 4</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 4</button>
+          {% if findings.total_open > 0 %}<span class="helper" style="margin-left: 10px;">{{ findings.total_open }} open finding{{ '' if findings.total_open == 1 else 's' }} will be carried forward as-is.</span>{% endif %}
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

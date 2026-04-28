@@ -22,6 +22,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `f90df8b` (2026-04-27) — Initial commit: Phases 1 & 2 build (16 files).
 - `0eef907` (2026-04-27) — Documented GitHub sync workflow in this context file.
 - `98d0bed` (2026-04-27) — Phase 3: Build the Software Inventory (10 files changed, +1097 lines).
+- `0adbac0` (2026-04-27) — Refresh techdebtcontext.md to post-Phase-3 state.
+- *(2026-04-28) Phase 4 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -32,7 +34,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 1 | Define the Scope               | **Live** |
 | 2 | Request Customer Data          | **Live** |
 | 3 | Build the Software Inventory   | **Live** |
-| 4 | Normalize the Data             | Planned  |
+| 4 | Normalize the Data             | **Live** |
 | 5 | Identify Product Overlap       | Planned  |
 | 6 | AI Assisted Comparison         | Planned  |
 | 7 | Identify Technical Debt        | Planned  |
@@ -96,7 +98,24 @@ inventory: {                           ← Phase 3
   ],
   finalized, finalized_at,
 }
+
+normalize: {                            ← Phase 4 (auto-init when inventory finalizes)
+  ignored_issues: {
+    "<issue_id>": { ignored_at, reason }
+  },
+  finalized, finalized_at,
+}
 ```
+
+**Issue ID schemes** (deterministic, so ignores stick across reloads):
+- `dup:<sorted product ids joined>` — duplicate product cluster
+- `vv:<sorted normalized vendor names joined with |>` — vendor name variants
+- `cv:<unmapped category text>` — category outside the standard list
+- `uc:<product_id>` — uncategorized
+- `mo:<product_id>:<missing-roles-csv>` — missing ownership
+- `mc:<product_id>` — missing cost
+- `mu:<product_id>` — missing primary use case
+- `la:<product_id>:<type>` — license math anomaly
 
 Future phases will add new top-level keys (e.g. `overlap`, `tech_debt`, `recommendations`) without touching existing fields.
 
@@ -150,6 +169,33 @@ Auto-calc behaviour: if `total_annual_cost` is blank but `cost_per_license` and 
 
 Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`. Reopen reverts.
 
+## Phase 4 deliverable
+
+The **Cleaned and Categorized Software Inventory** — Phase 4 doesn't produce a new artifact, it *transforms* the Phase 3 inventory in place. The normalize page surfaces eight kinds of findings, all of which can be fixed inline:
+
+| Detector | What it flags | Fix offered |
+|----------|---------------|-------------|
+| Duplicates | Same normalized (product, vendor) on 2+ rows | Pick keeper, merge (delete others) |
+| Vendor variants | Different spellings/suffixes of the same vendor (suffix-strip pass + difflib pass at 0.85) | Pick canonical name, apply to all rows in cluster |
+| Unmapped categories | Categories outside `PRODUCT_CATEGORIES` | Map to a standard category (suggested via difflib at 0.6) |
+| Uncategorized | Blank category | Edit product |
+| Missing owners | Blank business / technical / contract owner | Edit product |
+| Missing cost | Blank cost-per-license AND blank total-annual-cost | Edit product |
+| Unclear use | Blank primary use case | Edit product |
+| License anomalies | `assigned > purchased` or `users > assigned` | Edit product |
+
+**Ignore mechanism** — every finding has a stable `issue_id`. Marking a finding "ignore" stores `{ignored_at, reason}` in `normalize.ignored_issues`; subsequent loads skip it. Un-ignore is a single click.
+
+**Routes:**
+- GET `/engagements/<id>/normalize` — main workspace
+- POST `/normalize/apply-vendor` — standardize vendor cluster (`cluster_norms` + `canonical`)
+- POST `/normalize/apply-category` — remap a category (`old_category` + `new_category`)
+- POST `/normalize/merge-duplicates` — keep one row, delete others (`keep_id` + `delete_ids` CSV)
+- POST `/normalize/ignore` — ignore or un-ignore (`issue_id`, optional `reason`, optional `action=unignore`)
+- POST `/normalize/finalize` — finalize / reopen
+
+Finalize advances `status` to `overlap` and pre-marks Phase 5 as `in_progress`.
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -175,6 +221,12 @@ Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`
 | `/engagements/<id>/inventory/export.csv` | GET | Phase 3 deliverable (CSV) |
 | `/engagements/<id>/inventory/export.xlsx` | GET | Phase 3 deliverable (formatted XLSX) |
 | `/engagements/<id>/inventory/template.csv` | GET | Empty CSV template (canonical headers) |
+| `/engagements/<id>/normalize` | GET | Phase 4 — guided cleanup workspace |
+| `/engagements/<id>/normalize/apply-vendor` | POST | Phase 4 — standardize vendor cluster |
+| `/engagements/<id>/normalize/apply-category` | POST | Phase 4 — remap unmapped category |
+| `/engagements/<id>/normalize/merge-duplicates` | POST | Phase 4 — merge duplicate cluster |
+| `/engagements/<id>/normalize/ignore` | POST | Phase 4 — ignore / un-ignore finding |
+| `/engagements/<id>/normalize/finalize` | POST | Phase 4 — finalize / reopen |
 
 ## Decisions made
 
@@ -205,8 +257,9 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 
 - ~~Phase 2 — static checklist or real uploads?~~ **Resolved: real uploads with on-disk storage.**
 - ~~Inventory build (Phase 3) — manual entry first, or CSV/XLSX import first?~~ **Resolved: both. Manual add form + CSV/XLSX import with fuzzy column matching.**
+- ~~Phase 4 (Normalize) — separate review pass or inline?~~ **Resolved: separate review pass. Eight detectors run live each load, producing findings with stable issue IDs. One-click apply for vendor / category / merge; "ignore with reason" for false positives; remaining findings link to the product editor.**
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
-- Phase 4 (Normalize) — should this be a separate review pass or inline in the inventory page? Probably a guided workflow that flags duplicate vendor names, unrecognized categories, and missing ownership in batch with a single "apply suggestions" action.
+- Phase 5 (Identify Overlap) — overlap is a category-level question ("two project management tools, one wins"). Likely a per-category breakdown showing all products in that category side-by-side with cost / users / contract status, plus per-product disposition (Keep / Consolidate / Retire / Replace / Renegotiate / Further review).
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -259,3 +312,13 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 
 - Refreshed `techdebtcontext.md` to reflect the post-Phase-3 state. Architecture section now describes all live-phase code paths (was Phase-1 only). "Verified working" section replaced the stale Phase-1-only list with a per-phase summary plus pointer to the change-log entries below. Added a "Recent pushes" subsection under GitHub sync workflow. Added a "Routes quick reference" table covering all live endpoints. Captured the design decisions made during Phase 2 and Phase 3 (file storage on disk, auto status transitions, fuzzy CSV matching, auto-calc total, openpyxl reuse, finalize-then-pre-mark-next).
 - Removed a slightly inaccurate sentence: data model said "future phases will add new top-level keys (e.g. `inventory`, …)" — `inventory` is no longer hypothetical.
+
+### 2026-04-28 — Phase 4 build (Normalize the Data)
+
+- Added `import difflib` to top-level imports.
+- Phase 4 helpers: `_ensure_normalize`, `_norm_text`, `_norm_vendor` (strips a curated list of corporate suffixes — Inc, Corp, Corporation, Technologies, LLC, GmbH, AG, etc.), eight detector functions (`detect_duplicates`, `detect_vendor_variants`, `detect_unmapped_categories`, `detect_uncategorized`, `detect_missing_owners`, `detect_missing_cost`, `detect_unclear_use`, `detect_license_anomalies`), `_build_vendor_cluster`, and `collect_normalize_findings` (filters out ignored issues + adds `total_open` count).
+- Vendor variant detection runs in two passes: first a suffix-strip group (catches "Microsoft" vs "Microsoft Corporation" exactly), then difflib at 0.85 over the remaining single-spelling normalized vendors (catches typos like "Atlasian" vs "Atlassian"). Initial threshold was 0.85 only — caught typos but missed the suffix case (12-char suffix delta drops ratio below threshold). Added the suffix-strip pass to fix.
+- New routes: `engagement_normalize` (GET), `apply-vendor` / `apply-category` / `merge-duplicates` / `ignore` / `finalize` (all POST).
+- New template `normalize.html`: summary tiles for each finding category, separate sections for duplicates (with merge form), vendor variants (with canonical-name input), unmapped categories (with mapping select), license anomalies, missing data (sub-grouped: ownership / cost / uncategorized / unclear use), an "Ignored findings" panel, and a finalize button.
+- New CSS: `.finding`, `.finding-header`, `.finding-table`. `_sidebar.html` enables Phase 4 link, `engagement_view.html` surfaces a Phase 4 panel, `home.html` marks Phase 4 as Live.
+- Smoke test (Flask test client, file-based to dodge bash-quoting headaches): seeded 8 specimen products covering all eight detector cases. Verified counts (1 dup, ≥1 vendor variant, 1 unmapped cat, 1 each missing-owner / cost / use case / uncategorized, 2 license anomalies). Applied vendor standardization → both Microsoft variants merged. Applied category standardization → Wiki/KB → Document management. Merged duplicate Slack pair → 1 Slack row left. Ignored a license anomaly → count drops by 1, ignored_count rises; un-ignore reverses both. Finalize advanced engagement to Phase 5 and pre-marked overlap as `in_progress`. Reopen reverses. Live server confirmed `/normalize` returns 200 after reloader picked up changes.
