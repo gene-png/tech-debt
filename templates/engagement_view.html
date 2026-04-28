@@ -126,11 +126,31 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 6 — AI Assisted Comparison</h2>
+      {% set ar = eng.get('ai_review') %}
+      {% if ar and ar.finalized %}
+        <div class="notice">Phase 6 finalized on {{ ar.finalized_at[:10] }}.</div>
+      {% elif ar and ar.running %}
+        <div class="notice warn">AI review is running — refresh in a moment.</div>
+      {% elif ar and ar.findings %}
+        <div class="notice">{{ ar.findings | length }} AI finding(s) ready.</div>
+      {% else %}
+        <div class="notice warn">AI review has not run yet.</div>
+      {% endif %}
+      <p class="helper">Anonymizes the inventory (strips owners, notes, internal system names, and engagement metadata) before sending to Claude, then re-hydrates findings with your real product names.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_ai_review', engagement_id=eng.id) }}">
+          {% if ar and ar.finalized %}Review AI findings{% else %}Open AI review{% endif %}
+        </a>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 6 through 11 of the playbook will activate in upcoming releases — AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 7 through 11 of the playbook will activate in upcoming releases — Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

@@ -26,6 +26,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `fd36790` (2026-04-28) — Phase 4: Normalize the Data (7 files changed, +816 lines).
 - `f4cbb98` (2026-04-28) — Backfill fd36790 commit hash in change log.
 - `e9a919b` (2026-04-28) — Phase 5: Identify Product Overlap (8 files changed, +605 lines).
+- `f280ab5` (2026-04-28) — Backfill e9a919b commit hash in change log.
+- *(2026-04-28) Phase 6 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -38,7 +40,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 3 | Build the Software Inventory   | **Live** |
 | 4 | Normalize the Data             | **Live** |
 | 5 | Identify Product Overlap       | **Live** |
-| 6 | AI Assisted Comparison         | Planned  |
+| 6 | AI Assisted Comparison         | **Live** |
 | 7 | Identify Technical Debt        | Planned  |
 | 8 | Estimate Cost Savings          | Planned  |
 | 9 | Validate with Stakeholders     | Planned  |
@@ -47,8 +49,9 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 
 ## Architecture
 
-- **`app.py`** — All Flask routes for live phases (Phase 1 scope, Phase 2 data request + uploads, Phase 3 inventory CRUD / CSV+XLSX import-export), plus form coercion helpers, status-statement / checklist / inventory-export generators, and Jinja filters (`format_bytes`, `money`, `phase_label`, `phase_status_class`). The `PHASES` constant drives the sidebar; adding a new phase means adding a route + template + entry in `phase_progress`.
-- **`storage.py`** — JSON file I/O for engagements (`load_engagement`, `save_engagement`, `list_engagements`), plus the `new_engagement()` factory that pre-seeds `phase_progress` and `scope`. Other phases (`data_request`, `inventory`) are lazily initialized inside `app.py` on first visit so an engagement created before a phase shipped still works.
+- **`app.py`** — All Flask routes for live phases (Phase 1 scope, Phase 2 data request + uploads, Phase 3 inventory CRUD / CSV+XLSX import-export, Phase 4 normalize, Phase 5 overlap, Phase 6 AI review), plus form coercion helpers, statement / checklist / inventory-export / overlap-analysis generators, and Jinja filters (`format_bytes`, `money`, `phase_label`, `phase_status_class`). The `PHASES` constant drives the sidebar; adding a new phase means adding a route + template + entry in `phase_progress`.
+- **`ai_service.py`** — Phase 6 only. Anonymization (whitelist of safe fields, anonymized PROD_NNN IDs), Anthropic SDK call (system prompt + JSON-shaped output schema), tolerant JSON parsing (handles direct JSON / fenced / prose-with-fence), de-anonymization (maps PROD_NNN back to real product IDs and enriches findings with product details), background-thread worker with a per-engagement run lock. Hash-based cache invalidation by sanitized-inventory SHA-256.
+- **`storage.py`** — JSON file I/O for engagements (`load_engagement`, `save_engagement`, `list_engagements`), plus the `new_engagement()` factory that pre-seeds `phase_progress` and `scope`. Other phases (`data_request`, `inventory`, `normalize`, `overlap`, `ai_review`) are lazily initialized inside `app.py` / `ai_service.py` on first visit so an engagement created before a phase shipped still works.
 - **`templates/`** — `base.html` is the shared shell, `_sidebar.html` renders the phase nav with status dots, and each phase has dedicated templates: `engagement_scope.html` + `scope_statement.html` (Phase 1), `data_request.html` + `data_request_checklist.html` (Phase 2), `inventory_list.html` + `inventory_form.html` + `inventory_import.html` (Phase 3). The two "statement" / "checklist" templates are print-styled and use a separate `.statement` CSS class.
 - **`static/style.css`** — single CSS file, no JS framework, no build step. Sections: base/typography, layout, sidebar, panels, forms, tags, statement (print), Phase 2 data-request, Phase 3 inventory table.
 - **`data/`** — runtime, gitignored. One JSON file per engagement plus `uploads/<engagement_id>/<item_id>/` for Phase 2 file storage.
@@ -117,6 +120,23 @@ overlap: {                              ← Phase 5
       updated_at,
     }
   },
+  finalized, finalized_at,
+}
+
+ai_review: {                            ← Phase 6
+  running, started_at, completed_at,
+  model,                            ← e.g. claude-opus-4-7
+  last_inventory_hash,              ← cache-invalidation key (sanitized inventory hash)
+  findings: [
+    {
+      category, summary,
+      products: [{ id, product_name, vendor, category, annual_cost }],   ← re-hydrated from anonymized IDs
+      concern, potential_risk, estimated_cost_impact, recommended_next_step,
+    }
+  ],
+  raw_response,                     ← raw text from Claude (debug)
+  error,                            ← string if last run failed
+  anonymization_summary: { total_products, redacted_fields, safe_fields },
   finalized, finalized_at,
 }
 ```
@@ -233,6 +253,41 @@ The **Product Overlap Analysis** — captures every category that has 2+ product
 
 Finalize advances `status` to `ai_review` and pre-marks Phase 6 as `in_progress`.
 
+## Phase 6 deliverable
+
+The **AI Assisted Comparison** is a Claude-generated review of the inventory grouped by category. Findings are presented as `summary` / `concern` / `potential_risk` / `estimated_cost_impact` / `recommended_next_step` with the affected products linked back to the inventory editor.
+
+### Privacy model
+
+This is the most security-sensitive part of the workspace. Inventory data is *anonymized* before leaving the box:
+
+**Whitelist sent to Claude** (only these fields): `product_name`, `vendor`, `version`, `category`, `licenses_purchased`, `licenses_assigned`, `active_users`, `cost_per_license`, `total_annual_cost`, `renewal_date`, `contract_term`, `deployment_model`, `primary_use_case`, `data_sensitivity`. Each product is referenced by an anonymized ID (`PROD_001`, `PROD_002`…).
+
+**Stripped before send** (always): `business_owner`, `technical_owner`, `contract_owner`, `purchase_source`, `systems_supported`, `security_compliance`, `known_risks`, `notes`. Engagement metadata (name, client, lead consultant) and product UUIDs never leave the box either.
+
+Why these specific fields: vendor and product names *are* sent because the AI needs them to reason about overlap (Slack vs Microsoft Teams is meaningful; "Tool A" vs "Tool B" is useless). Those are public-knowledge identifiers, not customer-private. Owner names, internal system names, free-text notes (which often quote employees), and customer purchase details are exactly the things that would identify the customer if a prompt log leaked.
+
+### De-anonymization
+
+The AI's response references products only by `PROD_NNN`. After the call returns, those tokens are mapped back to real product IDs via an in-memory `deanon_map` (built fresh each run from the inventory order — never persisted), and each finding is enriched with `{id, product_name, vendor, category, annual_cost}` of the real products. The user sees their real product names and links; the API never did.
+
+### Auto-run + manual re-run
+
+When the user navigates to `/ai-review` and findings are stale (no findings yet, or the inventory hash differs from the last run), a background thread is kicked off automatically. The page renders a spinner with a 3-second meta-refresh until the worker writes results back. A manual "Re-run review" button is also visible at all times once findings exist. Cache invalidation is by SHA-256 of the sanitized inventory: change anything sent to the AI and the cache misses.
+
+### Failure modes handled
+
+- **No `ANTHROPIC_API_KEY`** — page renders setup instructions; Run button hidden.
+- **Empty inventory** — page asks the user to build the inventory in Phase 3 first.
+- **API call fails** (timeout, key rejected, network) — error stored on `ai_review.error` and surfaced with a Retry button.
+- **Malformed JSON from Claude** — `_parse_findings_json` tries direct parse, then a fenced code block, then a regex over the response text. Falls back to an empty findings list rather than crashing.
+
+### Routes
+
+- GET `/engagements/<id>/ai-review` — main page (auto-runs if stale).
+- POST `/engagements/<id>/ai-review/run` — force re-run.
+- POST `/engagements/<id>/ai-review/finalize` — finalize / reopen. Finalize advances `status` to `tech_debt` and pre-marks Phase 7 as `in_progress`.
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -268,6 +323,9 @@ Finalize advances `status` to `ai_review` and pre-marks Phase 6 as `in_progress`
 | `/engagements/<id>/overlap/finalize` | POST | Phase 5 — finalize / reopen |
 | `/engagements/<id>/overlap/analysis` | GET | Phase 5 deliverable (printable HTML) |
 | `/engagements/<id>/overlap/analysis.csv` | GET | Phase 5 deliverable (CSV) |
+| `/engagements/<id>/ai-review` | GET | Phase 6 — AI review page (auto-runs if stale) |
+| `/engagements/<id>/ai-review/run` | POST | Phase 6 — force re-run in background |
+| `/engagements/<id>/ai-review/finalize` | POST | Phase 6 — finalize / reopen |
 
 ## Decisions made
 
@@ -283,6 +341,10 @@ Finalize advances `status` to `ai_review` and pre-marks Phase 6 as `in_progress`
 - **Auto-calc `total_annual_cost`** — if blank but `cost_per_license × licenses_purchased` are present, the total is filled. Manual entries always take precedence.
 - **openpyxl for XLSX I/O** — already a dependency of the parent TSMA app; reusing it keeps deps minimal. CSV is preferred for round-tripping (no XLSX read on import would block customers; we support both).
 - **Finalize-then-pre-mark-next** — finalizing a phase advances the engagement `status` AND pre-marks the next phase as `in_progress`. Gives the next phase visible momentum in the sidebar instead of looking idle.
+- **Phase 6 anonymization is whitelist-based, not blacklist-based** — only explicitly safe fields are sent. Adding a new product field defaults to *not* sent; the developer has to consciously add it to `AI_SAFE_FIELDS` if it's appropriate. Less risk of accidental leakage when fields evolve.
+- **Phase 6 vendor / product names ARE sent** — they're public-knowledge identifiers (Slack is Slack everywhere), and stripping them would render the AI useless. The customer-private signal is in *who owns what at the customer*, not *what software exists in the world*. We protect the former, not the latter.
+- **Phase 6 anonymization map never persists** — `deanon_map` is built fresh each run from inventory order, used in-memory to substitute the AI response, then discarded. Persisting it alongside the data would defeat the purpose.
+- **Phase 6 cache invalidation by inventory SHA-256** — cheaper than re-running the AI on every page load, and automatically picks up any change the user makes (add product, edit field, normalize). User can also force a re-run via the manual button.
 
 ## Verified working
 
@@ -300,8 +362,11 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Inventory build (Phase 3) — manual entry first, or CSV/XLSX import first?~~ **Resolved: both. Manual add form + CSV/XLSX import with fuzzy column matching.**
 - ~~Phase 4 (Normalize) — separate review pass or inline?~~ **Resolved: separate review pass. Eight detectors run live each load, producing findings with stable issue IDs. One-click apply for vendor / category / merge; "ignore with reason" for false positives; remaining findings link to the product editor.**
 - ~~Phase 5 (Identify Overlap) — per-category comparison?~~ **Resolved: yes. Categories with 2+ products surface as overlap candidates; per-product disposition selector + risk + notes; potential savings computed from Retire/Replace/Consolidate dispositions; printable analysis + CSV export.**
+- ~~Phase 6 (AI Assisted Comparison) — auto-run + privacy?~~ **Resolved: auto-run on first visit when stale (background thread), manual re-run button always available; whitelist anonymization with PROD_NNN tokens; vendor / product names retained because they're public; owners / notes / internal systems / engagement metadata stripped; de-anon map ephemeral (never persisted).**
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
-- Phase 6 (AI Assisted Comparison) — uses the Anthropic SDK over the inventory + Phase 2 documents. The natural design: a single "Run AI review" button that bundles the inventory + the recommended Phase 6 prompt to Claude, stores the response, and renders findings grouped by category. Need to think about: token budget when there are many uploaded documents, per-engagement cost guardrails, and how to surface AI suggestions without making them auto-applied.
+- Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
+- Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
+- Phase 7 (Identify Technical Debt) — the playbook's checklist is heavily about ownership/governance gaps + product age/risk. Likely a per-product flag-checker form (similar to Phase 4 normalize) plus a dedicated debt register output; some flags can be auto-suggested from existing inventory fields (e.g. unsupported product flag if version + renewal indicate end-of-life).
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -374,3 +439,14 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Updated `_sidebar.html` (Phase 5 link), `engagement_view.html` (Phase 5 panel with workspace + analysis links), `home.html` (Phase 5 marked Live).
 - New CSS: `.overlap-cluster-header`, `.overlap-form` / `.overlap-scroll`, `.overlap-table` with `.row-keep` (green tint) and `.row-savings` (yellow tint) row shading, condensed select/input styling inside the table.
 - Smoke test (Flask test client, file-based): seeded 6 products with 2 overlap categories (3 PM tools + 2 collab tools) and 1 solo product. Verified `_overlap_summary` initial counts ($9,150 annual in overlap across 5 products in 2 categories). Saved PM dispositions (Keep/Retire/Consolidate) → potential savings = $1,300 (Asana $1k + Trello $300). Saved collab dispositions → decided_count = 5/5. Cleared Trello (blank submission) → entry removed from `dispositions`, savings drop to $1,000. Printable analysis renders with all expected strings. CSV export has 6 rows (header + 5 overlap products). Finalize advances engagement to Phase 6 (`ai_review` pre-marked `in_progress`); reopen reverses. Caught and fixed: Werkzeug test client wants dict-with-list-values for repeated form fields, not list-of-tuples.
+
+### 2026-04-28 — Phase 6 build (AI Assisted Comparison)
+
+- Added `anthropic` to `requirements.txt`.
+- New module `ai_service.py` with privacy-first design: `AI_SAFE_FIELDS` whitelist + `AI_REDACTED_FIELDS` for UI transparency, `anonymize_inventory()` returning `(sanitized_products, deanon_map)` with `PROD_NNN` IDs, `inventory_hash()` for cache invalidation (SHA-256 over the sanitized payload), `call_claude()` with system + user messages and JSON output schema, `_parse_findings_json()` (tolerant of direct JSON / fenced / prose-with-fence), `deanonymize_findings()` to map PROD_NNN back to real product details, `kick_off_review()` background thread launcher with a per-engagement run lock, `is_stale()` / `has_api_key()` helpers.
+- Anonymization invariants verified by smoke test: zero sensitive strings (employee names, internal system names, free-text notes containing personnel info, client name "Acme Corp", purchase source "Acme Corporate AmEx") leak into the JSON sent to Claude. Vendor + product names ARE retained — verified Slack / Microsoft / Atlassian / Asana Inc all present in sanitized payload because the AI needs them to compare overlap meaningfully.
+- New routes in `app.py`: `engagement_ai_review` (GET, auto-runs in background thread when stale + api key + has inventory + not already running), `engagement_ai_review_run` (POST forces re-run), `engagement_ai_review_finalize` (POST). Route logic graceful in absence of API key, in absence of inventory, while a run is in flight, after a failed run.
+- New template `ai_review.html` handling all five states: no-key (setup instructions, no Run button), no-inventory (link to Phase 3), running (spinner + 3s meta-refresh), error (alert + Retry button), findings (grouped by category, each finding showing summary / linked product tags / concern / risk / cost impact / next step). Always-visible privacy banner shows the field whitelist + redacted list at the top.
+- Updated `_sidebar.html` to enable Phase 6 link, `engagement_view.html` to surface a Phase 6 panel showing finding count or run status, `home.html` to mark Phase 6 as Live.
+- New CSS: `.privacy-card` (green banner), `.spinner` + `@keyframes spin` for the running state, `.ai-finding` with accent left-border, `.ai-finding-row` two-column label/value layout, `.ai-finding-products` for clickable product tags.
+- Smoke test exercised: anonymization (zero sensitive strings in payload, vendor/product names retained, anonymized PROD_NNN ID assignment, all 4 redacted fields confirmed absent), hash determinism, `_parse_findings_json` over three input forms (direct, fenced, prose-with-fence), de-anonymization (real product names + IDs come back through the map), page renders 200 in no-key state and in with-findings state, finalize/reopen transitions advance engagement to `tech_debt`. The actual Claude API call is verified by hand once `ANTHROPIC_API_KEY` is exported — the test fixture seeds the engagement with completed findings to exercise the rendering path without making a real network call.

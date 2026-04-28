@@ -8,6 +8,7 @@ from flask import Flask, render_template, request, redirect, url_for, abort, Res
 from datetime import datetime
 from werkzeug.utils import secure_filename
 
+import ai_service
 import storage
 
 app = Flask(__name__)
@@ -1745,6 +1746,92 @@ def engagement_overlap_analysis_csv(engagement_id):
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{fn}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — AI Assisted Comparison
+# ---------------------------------------------------------------------------
+
+@app.route("/engagements/<engagement_id>/ai-review")
+def engagement_ai_review(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if ai_service.ensure_ai_review(eng):
+        if (eng["phase_progress"].get("overlap") == "complete"
+                and eng["phase_progress"].get("ai_review") == "not_started"):
+            eng["phase_progress"]["ai_review"] = "in_progress"
+        storage.save_engagement(eng)
+
+    has_inventory = bool(eng.get("inventory", {}).get("products"))
+    has_key = ai_service.has_api_key()
+    auto_run_triggered = False
+
+    # Auto-run if: we have an API key, the inventory has products, the
+    # findings are stale, and a run isn't already in flight.
+    if (has_key
+            and has_inventory
+            and not eng["ai_review"].get("running")
+            and ai_service.is_stale(eng)):
+        if ai_service.kick_off_review(engagement_id):
+            eng = storage.load_engagement(engagement_id)
+            auto_run_triggered = True
+
+    return render_template(
+        "ai_review.html",
+        eng=eng,
+        has_inventory=has_inventory,
+        has_key=has_key,
+        is_stale=ai_service.is_stale(eng) if has_inventory else False,
+        auto_run_triggered=auto_run_triggered,
+        safe_fields=list(ai_service.AI_SAFE_FIELDS),
+        redacted_fields=list(ai_service.AI_REDACTED_FIELDS),
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/ai-review/run", methods=["POST"])
+def engagement_ai_review_run(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    ai_service.ensure_ai_review(eng)
+    if not ai_service.has_api_key():
+        eng["ai_review"]["error"] = (
+            "ANTHROPIC_API_KEY is not set. Export it in your environment "
+            "before running the AI review."
+        )
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_ai_review", engagement_id=engagement_id))
+    if not eng.get("inventory", {}).get("products"):
+        eng["ai_review"]["error"] = "No products in the inventory yet."
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_ai_review", engagement_id=engagement_id))
+    ai_service.kick_off_review(engagement_id)
+    return redirect(url_for("engagement_ai_review", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/ai-review/finalize", methods=["POST"])
+def engagement_ai_review_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    ai_service.ensure_ai_review(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["ai_review"]["finalized"] = False
+        eng["ai_review"]["finalized_at"] = None
+        eng["phase_progress"]["ai_review"] = "in_progress"
+        eng["status"] = "ai_review"
+    else:
+        eng["ai_review"]["finalized"] = True
+        eng["ai_review"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["ai_review"] = "complete"
+        eng["status"] = "tech_debt"
+        if eng["phase_progress"].get("tech_debt") == "not_started":
+            eng["phase_progress"]["tech_debt"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_ai_review", engagement_id=engagement_id))
 
 
 @app.template_filter("money")

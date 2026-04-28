@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}AI review · {{ eng.name }}{% endblock %}
+{% block head %}{% endblock %}
+{% block body %}
+{% set ar = eng.ai_review %}
+{% if ar.running %}
+<meta http-equiv="refresh" content="3">
+{% endif %}
+<div class="layout">
+  {% with current_phase = 'ai_review' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 6 — AI Assisted Comparison</h1>
+      <p class="lead">Claude reviews the inventory for redundant features, overlapping use cases, underused licenses, outdated products, and consolidation opportunities. The analysis runs automatically when you visit this page; manual re-run is available below.</p>
+
+      {% if ar.finalized %}
+        <div class="notice">Phase 6 finalized on {{ ar.finalized_at[:10] }}.</div>
+      {% endif %}
+
+      {# ----- Privacy banner (always visible) ----- #}
+      <div class="privacy-card">
+        <div class="privacy-card-title">Data privacy</div>
+        <div class="privacy-card-body">
+          <strong>Sent to Claude</strong> (whitelist): {{ safe_fields | join(', ') }}.
+          <br>
+          <strong>Stripped before send</strong>: {{ redacted_fields | join(', ') }}, plus engagement name, client, lead consultant. Each product is referenced by an anonymized ID (PROD_001…); the AI never sees real product IDs, owner names, internal system names, or free-text notes.
+          <br>
+          <strong>De-anonymization</strong>: the AI's response is mapped back to your real product names locally before display, never round-tripped through the API.
+        </div>
+      </div>
+    </div>
+
+    {# ----- State: no API key ----- #}
+    {% if not has_key %}
+      <div class="panel">
+        <div class="alert">
+          <strong>AI review unavailable</strong> — the <code>ANTHROPIC_API_KEY</code> environment variable is not set. Export it before launching the app:
+          <pre style="margin-top: 8px;">export ANTHROPIC_API_KEY=sk-ant-...
+python app.py</pre>
+          Once set, this page will auto-run the analysis on next visit.
+        </div>
+      </div>
+    {# ----- State: no inventory ----- #}
+    {% elif not has_inventory %}
+      <div class="panel">
+        <div class="notice warn">
+          The inventory is empty. <a href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Build the inventory in Phase 3</a> before running the AI review.
+        </div>
+      </div>
+    {% else %}
+
+      {# ----- State: running ----- #}
+      {% if ar.running %}
+        <div class="panel">
+          <div class="ai-running">
+            <div class="spinner"></div>
+            <div>
+              <strong>Running AI review…</strong>
+              <div class="meta">Started {{ ar.started_at[:19].replace('T', ' ') }} UTC. This page will refresh every 3 seconds.</div>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+
+      {# ----- State: error ----- #}
+      {% if ar.error and not ar.running %}
+        <div class="panel">
+          <div class="alert">
+            <strong>Last run failed:</strong> {{ ar.error }}
+          </div>
+          <form method="post" action="{{ url_for('engagement_ai_review_run', engagement_id=eng.id) }}">
+            <button class="btn" type="submit">Retry</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {# ----- State: findings present ----- #}
+      {% if ar.findings %}
+        <div class="panel">
+          <div class="row" style="align-items: center; margin-bottom: 8px;">
+            <div class="col">
+              <h2 class="inline" style="margin: 0; padding: 0; border: none;">Findings ({{ ar.findings | length }})</h2>
+              {% if ar.completed_at %}
+                <span class="meta" style="margin-left: 10px;">Completed {{ ar.completed_at[:19].replace('T', ' ') }} UTC · model {{ ar.model }}</span>
+              {% endif %}
+            </div>
+            <div class="col" style="flex: 0 0 auto;">
+              {% if not ar.running %}
+                <form method="post" action="{{ url_for('engagement_ai_review_run', engagement_id=eng.id) }}" class="inline-form">
+                  <button class="btn secondary" type="submit">Re-run review</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+          {% if is_stale and not ar.running %}
+            <div class="notice warn" style="margin-top: 4px;">Inventory has changed since the last AI review — re-run to refresh findings.</div>
+          {% endif %}
+        </div>
+
+        {% set findings_by_cat = {} %}
+        {% for f in ar.findings %}
+          {% set cat = f.category or 'Uncategorized' %}
+          {% set _ = findings_by_cat.setdefault(cat, []).append(f) %}
+        {% endfor %}
+
+        {% for cat, group in findings_by_cat.items() %}
+          <div class="panel">
+            <h2>{{ cat }}</h2>
+            {% for f in group %}
+              <div class="ai-finding">
+                <div class="ai-finding-summary">{{ f.summary }}</div>
+                {% if f.products %}
+                  <div class="ai-finding-products">
+                    {% for p in f.products %}
+                      <a class="tag cat" href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">{{ p.product_name }}{% if p.vendor %} <span style="opacity: 0.65;">· {{ p.vendor }}</span>{% endif %}</a>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if f.concern %}<div class="ai-finding-row"><div class="ai-label">Concern</div><div>{{ f.concern }}</div></div>{% endif %}
+                {% if f.potential_risk %}<div class="ai-finding-row"><div class="ai-label">Potential risk</div><div>{{ f.potential_risk }}</div></div>{% endif %}
+                {% if f.estimated_cost_impact %}<div class="ai-finding-row"><div class="ai-label">Cost impact</div><div>{{ f.estimated_cost_impact }}</div></div>{% endif %}
+                {% if f.recommended_next_step %}<div class="ai-finding-row"><div class="ai-label">Next step</div><div>{{ f.recommended_next_step }}</div></div>{% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% else %}
+        {# ----- State: stale or first run, not yet running ----- #}
+        {% if not ar.running %}
+          <div class="panel">
+            <p class="helper">No AI findings yet for the current inventory.</p>
+            <form method="post" action="{{ url_for('engagement_ai_review_run', engagement_id=eng.id) }}">
+              <button class="btn" type="submit">Run AI review now</button>
+            </form>
+          </div>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+
+    {# ----- Finalize panel (always visible if we have any state) ----- #}
+    <div class="panel">
+      <h2>Finalize Phase 6</h2>
+      <p class="helper">Lock the AI review once you've reviewed the findings. Phase 7 (Identify Technical Debt) activates next. You can reopen later.</p>
+      <form method="post" action="{{ url_for('engagement_ai_review_finalize', engagement_id=eng.id) }}">
+        {% if ar.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 6</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);" {% if ar.running %}disabled{% endif %}>Finalize Phase 6</button>
+          {% if ar.running %}<span class="helper" style="margin-left: 10px;">Wait for the current run to finish.</span>{% endif %}
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
