@@ -35,11 +35,13 @@
           <a href="{{ url_for('engagement_validation', engagement_id=eng.id) }}">{{ label }}</a>
         {% elif key == 'recommendations' %}
           <a href="{{ url_for('engagement_recommendations', engagement_id=eng.id) }}">{{ label }}</a>
+        {% elif key == 'exec_summary' %}
+          <a href="{{ url_for('engagement_exec_summary', engagement_id=eng.id) }}">{{ label }}</a>
         {% else %}
           <span style="opacity: 0.6;">{{ label }}</span>
         {% endif %}
       </li>
     {% endfor %}
   </ul>
-  <p class="helper" style="margin-top: 10px;">Phases 1 through 10 are live. Phase 11 is part of the playbook roadmap and will activate in a future release.</p>
+  <p class="helper" style="margin-top: 10px;">All 11 playbook phases are live.</p>
 </aside>

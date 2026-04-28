@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Executive summary · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'exec_summary' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 11 — Executive Summary</h1>
+      <p class="lead">The final phase synthesizes everything captured so far into a single executive briefing leadership can act on. Metrics are auto-computed from prior phases; the narrative fields below let you frame what matters most.</p>
+
+      {% set es = eng.exec_summary %}
+      {% if es.finalized %}
+        <div class="notice">Phase 11 finalized on {{ es.finalized_at[:10] }}. The engagement is complete.</div>
+      {% endif %}
+
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_exec_summary_briefing', engagement_id=eng.id) }}">View executive briefing</a>
+      </div>
+    </div>
+
+    {# ----- Auto-computed metrics: the 7 leadership questions ----- #}
+    <div class="panel">
+      <h2>The seven questions, answered automatically</h2>
+      <p class="helper">These values come straight from prior phases. Edit any underlying phase to update.</p>
+      <ol class="exec-questions">
+        <li>
+          <span class="exec-q">How many products were reviewed?</span>
+          <span class="exec-a"><strong>{{ metrics.products_reviewed }}</strong></span>
+        </li>
+        <li>
+          <span class="exec-q">What is the total annual software spend?</span>
+          <span class="exec-a"><strong>{{ metrics.total_annual_spend | money }}</strong></span>
+        </li>
+        <li>
+          <span class="exec-q">How many products overlap?</span>
+          <span class="exec-a"><strong>{{ metrics.products_in_overlap }}</strong> products across <strong>{{ metrics.overlap_categories }}</strong> categor{{ 'y' if metrics.overlap_categories == 1 else 'ies' }}</span>
+        </li>
+        <li>
+          <span class="exec-q">How many products have unused licenses?</span>
+          <span class="exec-a"><strong>{{ metrics.unused_count_flagged }}</strong> flagged in Phase 7{% if metrics.unused_count_secondary %} · {{ metrics.unused_count_secondary }} additional under-utilized{% endif %}</span>
+        </li>
+        <li>
+          <span class="exec-q">What technical debt was identified?</span>
+          <span class="exec-a"><strong>{{ metrics.tech_debt.products_with_debt }}</strong> of <strong>{{ metrics.tech_debt.total_products }}</strong> products flagged · {{ metrics.tech_debt.severity_counts.high }} high severity · {{ metrics.tech_debt.debt_annual | money }}/yr in flagged spend</span>
+        </li>
+        <li>
+          <span class="exec-q">What are the estimated cost savings?</span>
+          <span class="exec-a"><strong>{{ metrics.savings.total_recurring | money }}</strong>/yr non-rejected · <strong>{{ metrics.savings.approved_recurring | money }}</strong>/yr approved (conservative) · {{ metrics.savings.total_first_year | money }} net first-year</span>
+        </li>
+        <li>
+          <span class="exec-q">What decisions are needed from leadership?</span>
+          <span class="exec-a"><strong>{{ metrics.decisions_needed_count }}</strong> recommendation{{ 's' if metrics.decisions_needed_count != 1 else '' }} still in draft or deferred status</span>
+        </li>
+      </ol>
+    </div>
+
+    {# ----- Narrative fields ----- #}
+    <div class="panel">
+      <h2>Executive narrative</h2>
+      <p class="helper">Frame the story — leadership reads the briefing top-down, so the headline does the work.</p>
+      <form method="post">
+        {% set narr = es.narrative %}
+        <div class="field">
+          <label>Headline (1-2 sentences)</label>
+          <p class="helper">The TL;DR — what's the single most important point leadership should walk away with?</p>
+          <textarea name="headline" rows="2" placeholder="e.g. Acme can recover $215K/yr by consolidating overlapping PM and analytics tools; three high-risk security gaps need immediate attention.">{{ narr.headline or '' }}</textarea>
+        </div>
+        <div class="field">
+          <label>Key strategic finding</label>
+          <p class="helper">The pattern that connects multiple findings — the "so what" of the engagement.</p>
+          <textarea name="key_finding" rows="3">{{ narr.key_finding or '' }}</textarea>
+        </div>
+        <div class="field">
+          <label>Top recommendation</label>
+          <p class="helper">The single highest-impact action leadership should approve.</p>
+          <textarea name="top_recommendation" rows="3">{{ narr.top_recommendation or '' }}</textarea>
+        </div>
+        <div class="field">
+          <label>Leadership ask</label>
+          <p class="helper">The 1-3 specific decisions you need from leadership at the briefing.</p>
+          <textarea name="leadership_ask" rows="3">{{ narr.leadership_ask or '' }}</textarea>
+        </div>
+        <div class="field">
+          <label>Next steps / proposed timeline</label>
+          <textarea name="next_steps" rows="3">{{ narr.next_steps or '' }}</textarea>
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Save narrative</button>
+        </div>
+      </form>
+    </div>
+
+    {# ----- Action plan ----- #}
+    <div class="panel">
+      <h2>Prioritized action plan</h2>
+      <p class="helper">Auto-built from accepted Phase 10 recommendations. Sorted by risk (high first), then cost impact (high first), then level of effort (low first — quick wins early).</p>
+      {% if action_plan %}
+        <ol class="action-plan">
+          {% for r in action_plan %}
+            <li>
+              <div class="action-plan-head">
+                <strong>{{ r.finding }}</strong>
+                <span class="tag cat">{{ r.category_label }}</span>
+                {% if r.risk_level %}<span class="status-pill status-{% if r.risk_level == 'high' %}waived{% elif r.risk_level == 'medium' %}requested{% else %}not_applicable{% endif %}">{{ r.risk_level | upper }} RISK</span>{% endif %}
+              </div>
+              <div class="meta">
+                {% if r.product_names %}{{ r.product_names | join(', ') }} · {% endif %}
+                {% if r.timeline %}{{ r.timeline }}{% else %}timeline TBD{% endif %} ·
+                {% if r.decision_owner %}{{ r.decision_owner }}{% else %}owner TBD{% endif %}
+              </div>
+              {% if r.cost_impact %}<div class="meta">{{ r.cost_impact }}</div>{% endif %}
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="helper">No accepted recommendations yet. Visit <a href="{{ url_for('engagement_recommendations', engagement_id=eng.id) }}">Phase 10</a> and approve recommendations to populate the action plan.</p>
+      {% endif %}
+    </div>
+
+    {# ----- Deliverables manifest ----- #}
+    <div class="panel">
+      <h2>Final deliverables</h2>
+      <p class="helper">All 9 final deliverables called for by the playbook. Green = ready, gray = not started or upstream phase incomplete.</p>
+      <table class="checklist-table">
+        <thead><tr><th style="width: 80px;">Phase</th><th>Deliverable</th><th style="width: 120px;">Status</th><th style="width: 130px;"></th></tr></thead>
+        <tbody>
+          {% for item in manifest %}
+            <tr>
+              <td>{{ item.phase }}</td>
+              <td>{{ item.title }}</td>
+              <td>
+                {% if item.ready %}
+                  <span class="status-pill status-received">Ready</span>
+                {% else %}
+                  <span class="status-pill status-not_applicable">Not ready</span>
+                {% endif %}
+              </td>
+              <td><a href="{{ item.url }}">open →</a></td>
+            </tr>
+          {% endfor %}
+          <tr>
+            <td>11</td>
+            <td>Executive Briefing (this phase)</td>
+            <td><span class="status-pill status-{% if es.finalized %}received{% else %}requested{% endif %}">{% if es.finalized %}Finalized{% else %}Draft{% endif %}</span></td>
+            <td><a href="{{ url_for('engagement_exec_summary_briefing', engagement_id=eng.id) }}">open →</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Finalize Phase 11</h2>
+      <p class="helper">Lock the executive briefing. The engagement will be marked <code>complete</code>. You can reopen later if leadership requests changes.</p>
+      <form method="post" action="{{ url_for('engagement_exec_summary_finalize', engagement_id=eng.id) }}">
+        {% if es.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 11</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize engagement</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

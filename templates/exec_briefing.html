@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Executive briefing · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_exec_summary', engagement_id=eng.id) }}">← Back</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+{% set narr = eng.exec_summary.narrative %}
+<article class="statement">
+  <div class="briefing-cover">
+    <div class="briefing-eyebrow">Software Rationalization Engagement · Executive Briefing</div>
+    <h1>{{ eng.name }}</h1>
+    <div class="meta-line">
+      <strong>{{ eng.client }}</strong>
+      {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+      Generated {{ eng.updated_at[:10] }}{% if eng.exec_summary.finalized_at %} · Finalized {{ eng.exec_summary.finalized_at[:10] }}{% endif %}
+    </div>
+  </div>
+
+  {% if narr.headline %}
+    <div class="briefing-headline">{{ narr.headline }}</div>
+  {% endif %}
+
+  <h2>The seven questions</h2>
+  <table class="briefing-q-table">
+    <tbody>
+      <tr><td>Products reviewed</td><td><strong>{{ metrics.products_reviewed }}</strong></td></tr>
+      <tr><td>Total annual software spend</td><td><strong>{{ metrics.total_annual_spend | money }}</strong></td></tr>
+      <tr><td>Products in overlap</td><td><strong>{{ metrics.products_in_overlap }}</strong> across {{ metrics.overlap_categories }} categor{{ 'y' if metrics.overlap_categories == 1 else 'ies' }}</td></tr>
+      <tr><td>Products with unused licenses</td><td><strong>{{ metrics.unused_count_flagged }}</strong> flagged{% if metrics.unused_count_secondary %} · {{ metrics.unused_count_secondary }} additional under-utilized{% endif %}</td></tr>
+      <tr><td>Technical debt identified</td><td><strong>{{ metrics.tech_debt.products_with_debt }}</strong> of {{ metrics.tech_debt.total_products }} products · {{ metrics.tech_debt.severity_counts.high }} high · {{ metrics.tech_debt.debt_annual | money }}/yr in flagged spend</td></tr>
+      <tr><td>Estimated cost savings</td><td><strong>{{ metrics.savings.total_recurring | money }}</strong>/yr non-rejected · <strong>{{ metrics.savings.approved_recurring | money }}</strong>/yr approved · {{ metrics.savings.total_first_year | money }} first-year net</td></tr>
+      <tr><td>Decisions needed from leadership</td><td><strong>{{ metrics.decisions_needed_count }}</strong> recommendation{{ 's' if metrics.decisions_needed_count != 1 else '' }} pending decision</td></tr>
+    </tbody>
+  </table>
+
+  {% if narr.key_finding %}
+    <h2>Key strategic finding</h2>
+    <p>{{ narr.key_finding }}</p>
+  {% endif %}
+
+  {% if narr.top_recommendation %}
+    <h2>Top recommendation</h2>
+    <p>{{ narr.top_recommendation }}</p>
+  {% endif %}
+
+  {% if narr.leadership_ask %}
+    <h2>Leadership ask</h2>
+    <p>{{ narr.leadership_ask }}</p>
+  {% endif %}
+
+  {% if action_plan %}
+    <h2>Prioritized action plan</h2>
+    <p class="meta-line">Sorted by risk (high first) → cost impact (high first) → level of effort (low first).</p>
+    <ol class="briefing-plan">
+      {% for r in action_plan %}
+        <li>
+          <div class="briefing-plan-head"><strong>{{ r.finding }}</strong> &middot; <em>{{ r.category_label }}</em></div>
+          {% if r.product_names %}<div class="meta-line">Products: {{ r.product_names | join(', ') }}</div>{% endif %}
+          <dl class="kv" style="grid-template-columns: 140px 1fr; margin-top: 6px;">
+            {% if r.cost_impact %}<dt>Cost impact</dt><dd>{{ r.cost_impact }}</dd>{% endif %}
+            {% if r.risk_level %}<dt>Risk</dt><dd>{{ r.risk_level | title }}</dd>{% endif %}
+            {% if r.level_of_effort %}<dt>Effort</dt><dd>{{ r.level_of_effort | title }}</dd>{% endif %}
+            {% if r.timeline %}<dt>Timeline</dt><dd>{{ r.timeline }}</dd>{% endif %}
+            {% if r.decision_owner %}<dt>Decision owner</dt><dd>{{ r.decision_owner }}</dd>{% endif %}
+            {% if r.recommended_action %}<dt>Action</dt><dd>{{ r.recommended_action }}</dd>{% endif %}
+          </dl>
+        </li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+
+  {% if metrics.decisions_needed %}
+    <h2>Decisions still pending</h2>
+    <p class="meta-line">Recommendations marked <em>draft</em> or <em>deferred</em> in Phase 10.</p>
+    <ul>
+      {% for r in metrics.decisions_needed %}
+        <li><strong>{{ r.finding }}</strong> &mdash; {{ status_label.get(r.status, r.status) }}{% if r.recommended_action %} · {{ r.recommended_action }}{% endif %}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if narr.next_steps %}
+    <h2>Next steps</h2>
+    <p>{{ narr.next_steps }}</p>
+  {% endif %}
+
+  <h2>Final deliverables</h2>
+  <p class="meta-line">All artifacts produced during this engagement, with links.</p>
+  <table class="checklist-table">
+    <thead><tr><th style="width: 60px;">Phase</th><th>Deliverable</th><th style="width: 120px;">Status</th></tr></thead>
+    <tbody>
+      {% for item in manifest %}
+        <tr>
+          <td>{{ item.phase }}</td>
+          <td><a href="{{ item.url }}">{{ item.title }}</a></td>
+          <td>{% if item.ready %}<span class="status-pill status-received">Ready</span>{% else %}<span class="status-pill status-not_applicable">Not ready</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      <tr>
+        <td>11</td>
+        <td>Executive Briefing (this document)</td>
+        <td><span class="status-pill status-{% if eng.exec_summary.finalized %}received{% else %}requested{% endif %}">{% if eng.exec_summary.finalized %}Finalized{% else %}Draft{% endif %}</span></td>
+      </tr>
+    </tbody>
+  </table>
+</article>
+{% endblock %}

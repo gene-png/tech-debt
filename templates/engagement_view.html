@@ -234,15 +234,22 @@
     </div>
 
     <div class="panel">
-      <h2>What's next</h2>
-      <p class="helper">Phase 11 of the playbook will activate in an upcoming release — the Executive Summary. The data model already reserves space for it.</p>
-      <ul class="phase-list">
-        {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings', 'validation', 'recommendations') %}
-            <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
-          {% endif %}
-        {% endfor %}
-      </ul>
+      <h2>Phase 11 — Executive Summary</h2>
+      {% set ed = eng.get('exec_summary') %}
+      {% if ed and ed.finalized %}
+        <div class="notice">Phase 11 finalized on {{ ed.finalized_at[:10] }}. The engagement is complete.</div>
+      {% elif eng.phase_progress.exec_summary == 'in_progress' %}
+        <div class="notice warn">Executive briefing in progress.</div>
+      {% else %}
+        <div class="notice warn">Executive briefing has not been started.</div>
+      {% endif %}
+      <p class="helper">Auto-answers the seven leadership questions from the playbook, builds a prioritized action plan from accepted Phase 10 recommendations, and links to all 9 deliverables produced during the engagement.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_exec_summary', engagement_id=eng.id) }}">
+          {% if ed and ed.finalized %}Review executive briefing{% else %}Open executive summary{% endif %}
+        </a>
+        <a class="btn secondary" href="{{ url_for('engagement_exec_summary_briefing', engagement_id=eng.id) }}">View briefing</a>
+      </div>
     </div>
   </div>
 </div>

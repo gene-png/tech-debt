@@ -36,6 +36,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `feddd7d` (2026-04-28) — Phase 9: Validate with Stakeholders (8 files changed, +710 lines).
 - `493930c` (2026-04-28) — Backfill feddd7d commit hash in change log.
 - `632e47b` (2026-04-28) — Phase 10: Create Recommendations (8 files changed, +968 lines).
+- `5a8eeb0` (2026-04-28) — Backfill 632e47b commit hash in change log.
+- *(2026-04-28) Phase 11 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -53,7 +55,9 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 8 | Estimate Cost Savings          | **Live** |
 | 9 | Validate with Stakeholders     | **Live** |
 | 10 | Create Recommendations        | **Live** |
-| 11 | Create the Executive Summary  | Planned  |
+| 11 | Create the Executive Summary  | **Live** |
+
+**All 11 playbook phases are now live.**
 
 ## Architecture
 
@@ -218,7 +222,20 @@ recommendations: {                      ← Phase 10
   },
   finalized, finalized_at,
 }
+
+exec_summary: {                         ← Phase 11
+  narrative: {
+    headline,                       ← TL;DR for leadership
+    key_finding,                    ← strategic pattern across the engagement
+    top_recommendation,             ← highest-impact ask
+    leadership_ask,                 ← 1–3 specific decisions needed
+    next_steps,                     ← proposed timeline
+  },
+  finalized, finalized_at,
+}
 ```
+
+When Phase 11 finalizes, the engagement-level `status` flips to `complete` (instead of pre-marking a next phase, since this is the last one).
 
 **Stakeholder roles** (8 from the playbook): IT leadership, Cybersecurity team, Finance, Procurement, Business unit owner, System administrator, Power user, Compliance / legal.
 
@@ -528,6 +545,65 @@ The recommendation card captures all 11 fields the playbook calls for: finding, 
 - GET `/engagements/<id>/recommendations/report` — printable HTML
 - GET `/engagements/<id>/recommendations/report.csv` — CSV export
 
+## Phase 11 deliverable
+
+The **Executive Briefing** is the final deliverable — a single-page summary leadership reads top-down. Available as:
+- Workspace: `/engagements/<id>/exec-summary`
+- Printable briefing: `/engagements/<id>/exec-summary/briefing`
+
+### Auto-computed metrics (the seven leadership questions)
+
+`_compute_exec_metrics(eng)` produces every metric on the briefing without any user input:
+
+1. **Products reviewed** ← `len(inventory.products)`
+2. **Total annual software spend** ← sum of `total_annual_cost` across inventory
+3. **Products in overlap** ← Phase 5 cluster sums (`products_in_overlap` + `overlap_categories`)
+4. **Products with unused licenses** ← Phase 7 `unused`-flagged count, plus a secondary "under-utilized" count for products where active < 70% of purchased that weren't already flagged
+5. **Technical debt identified** ← Phase 7 summary (products flagged, severity breakdown, annual cost in flagged products)
+6. **Estimated cost savings** ← Phase 8 summary, both non-rejected and approved-only
+7. **Decisions needed** ← Phase 10 recommendations with status `draft` or `deferred`
+
+### Editable narrative fields
+
+Five fields the consultant fills in to frame the story:
+- **headline** — TL;DR shown in a highlighted callout above everything else on the printable briefing
+- **key_finding** — strategic pattern that connects multiple findings
+- **top_recommendation** — single highest-impact action
+- **leadership_ask** — 1–3 specific decisions needed at the briefing
+- **next_steps** — proposed timeline / first actions
+
+### Prioritized action plan
+
+`_build_action_plan(eng)` returns accepted Phase 10 recommendations sorted by:
+1. **Risk level** (high first — risk reduction is urgent)
+2. **Cost magnitude** (high first — pulls dollar values from `cost_impact` text via regex)
+3. **Level of effort** (low first — favor quick wins)
+
+Each item shows finding, category, risk pill, products, timeline, decision owner, cost impact.
+
+### Final deliverables manifest
+
+`_deliverables_manifest(eng)` builds 10 entries (Phases 1–10) with title, URL, and a `ready` boolean derived from each phase's data:
+- **Phase 1** Software Review Scope Statement (`scope.finalized`)
+- **Phase 2** Customer Data Request Checklist (`data_request.finalized`)
+- **Phase 3** Master Software Inventory XLSX (`inventory.products` non-empty)
+- **Phase 4** Cleaned & Categorized Inventory (`normalize.finalized`)
+- **Phase 5** Product Overlap Analysis (`overlap.finalized`)
+- **Phase 6** AI Assisted Comparison Findings (`ai_review.findings` non-empty)
+- **Phase 7** Technical Debt Findings Register (`tech_debt.flags` non-empty)
+- **Phase 8** Cost Savings Estimate (`savings.opportunities` non-empty)
+- **Phase 9** Stakeholder Validation Notes (`validation.validations` non-empty)
+- **Phase 10** Recommendation Report (`recommendations.recs` non-empty)
+
+The briefing itself is the eleventh deliverable, rendered inline as the executive summary document.
+
+### Routes
+
+- GET `/engagements/<id>/exec-summary` — workspace (auto-init on first visit, read-only metrics + editable narrative form + action plan preview + deliverables manifest)
+- POST `/engagements/<id>/exec-summary` — save narrative (5 fields)
+- POST `/engagements/<id>/exec-summary/finalize` — finalize / reopen. **This is the last phase**: finalize sets engagement `status` to `complete` (no next-phase pre-mark).
+- GET `/engagements/<id>/exec-summary/briefing` — printable HTML briefing
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -594,6 +670,9 @@ The recommendation card captures all 11 fields the playbook calls for: finding, 
 | `/engagements/<id>/recommendations/finalize` | POST | Phase 10 — finalize / reopen |
 | `/engagements/<id>/recommendations/report` | GET | Phase 10 — printable report (grouped by category) |
 | `/engagements/<id>/recommendations/report.csv` | GET | Phase 10 — CSV export |
+| `/engagements/<id>/exec-summary` | GET / POST | Phase 11 — workspace (GET renders, POST saves narrative) |
+| `/engagements/<id>/exec-summary/finalize` | POST | Phase 11 — finalize / reopen (engagement → `complete`) |
+| `/engagements/<id>/exec-summary/briefing` | GET | Phase 11 — printable Executive Briefing (final deliverable) |
 
 ## Decisions made
 
@@ -635,11 +714,12 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 8 (Estimate Cost Savings) — separate worksheet or implicit in Phases 5/7?~~ **Resolved: separate worksheet that auto-seeds from Phase 5 dispositions + Phase 7 unused flags. Per-opportunity card with current cost / recurring savings / one-time / migration / training, status (proposed/approved/rejected), and a portfolio rollup that splits "non-rejected" from "approved-only" — the conservative number leadership uses.**
 - ~~Phase 9 (Validate with Stakeholders) — anchor to what?~~ **Resolved: anchor to Phase 8 opportunities. Stakeholder roster (8 role types) parsed from a pipe-separated text block, structured answers to the 7 validation questions, overall status (not_started / pending / validated / blocked), free notes. No orphan validations — every validation lineages back to a savings opportunity.**
 - ~~Phase 10 (Recommendations) — synthesize from prior phases?~~ **Resolved: yes. One auto-seeded recommendation per Phase 8 opportunity. Auto-fill pulls finding/products/cost from Phase 8, business impact from Phase 9 validation answers (with primary_use_case fallback), tech-debt impact from Phase 7 flag labels, security impact from `weak_security` flag + `data_sensitivity` levels, recommended action from disposition mapping. Manual fields (LoE, risk, timeline, decision owner) stay blank at seed time. 8 categories from the playbook drive grouping in workspace and printable report.**
+- ~~Phase 11 (Executive Summary) — auto-compute or manual?~~ **Resolved: hybrid. The 7 leadership questions are computed entirely from prior-phase data (no manual entry — single source of truth). 5 narrative fields are editable to frame the story. Action plan is auto-built from accepted Phase 10 recommendations sorted by risk → cost → effort. Deliverables manifest auto-renders ready/not-ready state for all 10 prior outputs plus the briefing itself. Finalizing flips engagement status to `complete`.**
 - **`ANTHROPIC_API_KEY` setup** — chip dropped to spin off a separate session that exports the key, restarts the server, and verifies a real Phase 6 run. Not a blocker for further phase work.
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
 - Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
 - Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
-- Phase 11 (Executive Summary) — final synthesis answering the seven leadership questions from the playbook (products reviewed, total spend, products that overlap, products with unused licenses, technical debt identified, estimated cost savings, decisions needed). Likely a single-page printable summary that pulls aggregates from earlier phases (counts from Phase 3 inventory, overlap from Phase 5, debt from Phase 7, savings from Phase 8) plus a "decisions needed" section pulled from Phase 10 recommendations marked draft or deferred. Probably also has a few editable fields for the executive-facing narrative (key finding, leadership ask).
+- All 11 phases of the playbook are now live. Future enhancements would focus on quality-of-life polish: customer-facing self-upload portal for Phase 2, AI re-runs over uploaded documents for Phase 6 (currently inventory-only), multi-user auth for shared deployments, automated backup of `data/`. None of those block running real engagements end-to-end.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -777,3 +857,14 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Updated `_sidebar.html`, `engagement_view.html`, `home.html` for Phase 10 Live state.
 - New CSS: `.rec-category-header` (uppercase divider), `.rec-card` with status-tinted left-border (good for accepted, default border for deferred, accent for draft), `.rec-grid` responsive 2-col layout, `.rec-report-item` for the printable view.
 - Smoke test (file-based): seeded inventory + Phase 5 retire disposition + Phase 7 (`weak_security` + `duplicative` flags) + Phase 8 opportunity + Phase 9 validation answers. Phase 10 seed created exactly 1 recommendation with all auto-fill working: category=retirement (from disposition=retire); business_impact contained Phase 9's "Marketing campaign planning" answer plus the "If removed: …" suffix from `what_breaks`; tech_debt_impact listed both Phase 7 flag labels; security_impact mentioned "Weak security controls flagged" + "Data sensitivity: Internal"; cost_impact formatted "$1,000/yr recurring savings"; status=draft (Phase 8 opp was proposed not approved). Re-seed was idempotent. Edited rec with all manual fields (LoE/risk/timeline/decision_owner) and accepted it. Custom recommendation (governance_improvement) added. Quick-action defer worked. Summary returned correct rollups. Report HTML grouped by category and rendered all expected strings; report CSV had header + 2 rec rows. Delete worked. Finalize advanced engagement to Phase 11 (`exec_summary` pre-marked `in_progress`); reopen reverses. Caught and fixed one Jinja gotcha: a context dict key named `items` collided with `dict.items()` method; renamed to `recs`.
+
+### 2026-04-28 — Phase 11 build (Executive Summary) — engagement complete
+
+- Added Phase 11 helpers to `app.py`: `_ensure_exec_summary`, `_compute_exec_metrics` (auto-answers all 7 leadership questions from prior-phase data — no manual entry), `_build_action_plan` (sorts accepted Phase 10 recommendations by risk → cost → LoE; cost magnitude extracted from `cost_impact` text via regex), `_deliverables_manifest` (10 entries Phase 1–10 with title/URL/ready boolean derived from each phase's data — uses Flask `url_for` so links survive route renames).
+- Routes: `engagement_exec_summary` (GET workspace, POST saves narrative — 5 fields), `engagement_exec_summary_finalize` (last-phase finalize flips engagement `status` to `complete` — no next-phase pre-mark since this is the end), `engagement_exec_summary_briefing` (printable HTML).
+- New templates: `exec_summary.html` (workspace with the 7 questions answered automatically as a numbered list with answer values pulled live, narrative form, action-plan preview with auto-numbered list, deliverables manifest table, finalize panel) and `exec_briefing.html` (printable: cover with eyebrow + title + meta, optional headline callout, 7-question table, narrative sections, action plan with full detail per item, pending decisions list, next steps, deliverables manifest with links).
+- Updated `_sidebar.html` to enable the Phase 11 link and updated the helper text to "All 11 playbook phases are live." Updated `engagement_view.html` to surface a Phase 11 panel with completion notice. Updated `home.html` to mark every phase Live.
+- New CSS: `.exec-questions` (numbered list with circular accent badges), `.exec-q` / `.exec-a` two-column row layout, `.action-plan` (numbered list with circular badges), `.briefing-cover` (centered cover block with double bottom border), `.briefing-eyebrow` (uppercase label), `.briefing-headline` (left-bordered callout in accent blue), `.briefing-q-table` (zebra-free q&a table), `.briefing-plan`.
+- Smoke test (file-based): seeded full pipeline — 3 products, Phase 5 dispositions, Phase 7 unused flag, Phase 8 seeded opportunities, Phase 10 seeded recommendations with one accepted (Asana retire). Verified `_compute_exec_metrics`: products_reviewed=3, total_annual_spend=$7,600 (10×100 + 8×200 + 50×100), products_in_overlap=2, overlap_categories=1, unused_count_flagged=1, tech_debt.products_with_debt=1, savings.total_recurring=$6,000 ($1k Asana + $5k GhostTool), decisions_needed_count=1. Action plan returned the 1 accepted rec with correct sort + product names. Manifest returned 10 items with 4 in `ready=true` state (3, 7, 8, 10). Saved narrative with all 5 fields. Briefing HTML rendered: client name, headline callout, 7-question table, action plan, pending decisions, deliverables list — all present. Finalize set engagement.status to "complete"; reopen reverses.
+
+**The dashboard now implements the entire playbook end-to-end.**

@@ -1875,6 +1875,239 @@ def engagement_overlap_analysis_csv(engagement_id):
 
 
 # ---------------------------------------------------------------------------
+# Phase 11 — Executive Summary
+# ---------------------------------------------------------------------------
+
+def _ensure_exec_summary(eng):
+    if "exec_summary" in eng and "narrative" in eng["exec_summary"]:
+        return False
+    eng["exec_summary"] = {
+        "narrative": {
+            "headline": "",
+            "key_finding": "",
+            "top_recommendation": "",
+            "leadership_ask": "",
+            "next_steps": "",
+        },
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _compute_exec_metrics(eng):
+    """Auto-compute answers to the 7 executive-summary questions from prior phases."""
+    products = eng.get("inventory", {}).get("products", [])
+
+    # Q1: Products reviewed
+    products_reviewed = len(products)
+
+    # Q2: Total annual spend
+    total_annual_spend = sum(_safe_float(p.get("total_annual_cost")) for p in products)
+
+    # Q3: Products that overlap (Phase 5)
+    overlap_clusters = _overlap_clusters(products)
+    products_in_overlap = sum(len(c["products"]) for c in overlap_clusters)
+    overlap_categories = len(overlap_clusters)
+
+    # Q4: Products with unused licenses (Phase 7 unused flag)
+    td_flags = eng.get("tech_debt", {}).get("flags", {})
+    unused_count = sum(
+        1 for rec in td_flags.values()
+        if "unused" in (rec.get("flags") or [])
+    )
+    # also count secondary signal: products where assigned > active (not flagged)
+    secondary_unused = 0
+    for p in products:
+        purchased = _safe_int(p.get("licenses_purchased"))
+        active = _safe_int(p.get("active_users"))
+        pid = p["id"]
+        if pid in td_flags and "unused" in (td_flags[pid].get("flags") or []):
+            continue  # already counted above
+        if purchased > 0 and active > 0 and active < purchased * 0.7:
+            secondary_unused += 1
+
+    # Q5: Technical debt identified (Phase 7)
+    td_summary = _tech_debt_summary(eng)
+
+    # Q6: Estimated cost savings (Phase 8)
+    sv_summary = _savings_summary(eng)
+
+    # Q7: Decisions needed (Phase 10)
+    recs = eng.get("recommendations", {}).get("recs", {}).values()
+    decisions_needed = [r for r in recs if r.get("status") in {"draft", "deferred"}]
+
+    return {
+        "products_reviewed": products_reviewed,
+        "total_annual_spend": total_annual_spend,
+        "products_in_overlap": products_in_overlap,
+        "overlap_categories": overlap_categories,
+        "unused_count_flagged": unused_count,
+        "unused_count_secondary": secondary_unused,
+        "tech_debt": td_summary,
+        "savings": sv_summary,
+        "decisions_needed_count": len(decisions_needed),
+        "decisions_needed": decisions_needed,
+    }
+
+
+def _build_action_plan(eng):
+    """
+    Prioritized action plan: accepted Phase 10 recommendations sorted by
+      1) risk level (high first — risk reduction is urgent)
+      2) cost impact magnitude (high first — savings urgency)
+      3) level of effort (low first — favor quick wins)
+    Returns list of recommendation dicts annotated with product names.
+    """
+    products_by_id = {p["id"]: p for p in eng.get("inventory", {}).get("products", [])}
+    cat_label = {k: l for k, l in RECOMMENDATION_CATEGORIES}
+    risk_order = {"high": 0, "medium": 1, "low": 2, "": 3}
+    loe_order = {"low": 0, "medium": 1, "high": 2, "": 3}
+
+    accepted = [r for r in eng.get("recommendations", {}).get("recs", {}).values()
+                if r.get("status") == "accepted"]
+
+    def cost_magnitude(r):
+        # Heuristic: pull dollar values from cost_impact text
+        import re
+        m = re.findall(r"\$([\d,]+)", r.get("cost_impact") or "")
+        if not m:
+            return 0.0
+        return max(float(v.replace(",", "")) for v in m)
+
+    accepted.sort(key=lambda r: (
+        risk_order.get(r.get("risk_level", ""), 3),
+        -cost_magnitude(r),
+        loe_order.get(r.get("level_of_effort", ""), 3),
+    ))
+
+    annotated = []
+    for r in accepted:
+        names = [products_by_id.get(pid, {}).get("product_name", "")
+                 for pid in r.get("product_ids", []) if pid in products_by_id]
+        annotated.append({
+            **r,
+            "product_names": names,
+            "category_label": cat_label.get(r.get("category", ""), ""),
+        })
+    return annotated
+
+
+def _deliverables_manifest(eng):
+    """All 9 final deliverables with their URLs and readiness state."""
+    items = [
+        {"phase": 1, "title": "Software Review Scope Statement",
+         "url": url_for("scope_statement", engagement_id=eng["id"]),
+         "ready": bool(eng.get("scope", {}).get("finalized"))},
+        {"phase": 2, "title": "Customer Data Request Checklist",
+         "url": url_for("engagement_data_request_checklist", engagement_id=eng["id"]),
+         "ready": bool(eng.get("data_request", {}).get("finalized"))},
+        {"phase": 3, "title": "Master Software Inventory (XLSX)",
+         "url": url_for("engagement_inventory_export_xlsx", engagement_id=eng["id"]),
+         "ready": bool(eng.get("inventory", {}).get("products"))},
+        {"phase": 4, "title": "Cleaned & Categorized Inventory",
+         "url": url_for("engagement_normalize", engagement_id=eng["id"]),
+         "ready": bool(eng.get("normalize", {}).get("finalized"))},
+        {"phase": 5, "title": "Product Overlap Analysis",
+         "url": url_for("engagement_overlap_analysis", engagement_id=eng["id"]),
+         "ready": bool(eng.get("overlap", {}).get("finalized"))},
+        {"phase": 6, "title": "AI Assisted Comparison Findings",
+         "url": url_for("engagement_ai_review", engagement_id=eng["id"]),
+         "ready": bool(eng.get("ai_review", {}).get("findings"))},
+        {"phase": 7, "title": "Technical Debt Findings Register",
+         "url": url_for("engagement_tech_debt_register", engagement_id=eng["id"]),
+         "ready": bool(eng.get("tech_debt", {}).get("flags"))},
+        {"phase": 8, "title": "Cost Savings Estimate",
+         "url": url_for("engagement_savings_estimate", engagement_id=eng["id"]),
+         "ready": bool(eng.get("savings", {}).get("opportunities"))},
+        {"phase": 9, "title": "Stakeholder Validation Notes",
+         "url": url_for("engagement_validation_notes", engagement_id=eng["id"]),
+         "ready": bool(eng.get("validation", {}).get("validations"))},
+        {"phase": 10, "title": "Recommendation Report",
+         "url": url_for("engagement_recommendations_report", engagement_id=eng["id"]),
+         "ready": bool(eng.get("recommendations", {}).get("recs"))},
+    ]
+    return items
+
+
+@app.route("/engagements/<engagement_id>/exec-summary", methods=["GET", "POST"])
+def engagement_exec_summary(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_exec_summary(eng):
+        if (eng["phase_progress"].get("recommendations") == "complete"
+                and eng["phase_progress"].get("exec_summary") == "not_started"):
+            eng["phase_progress"]["exec_summary"] = "in_progress"
+        storage.save_engagement(eng)
+
+    if request.method == "POST":
+        narr = eng["exec_summary"]["narrative"]
+        for key in ("headline", "key_finding", "top_recommendation",
+                    "leadership_ask", "next_steps"):
+            narr[key] = request.form.get(key, "").strip()
+        if eng["phase_progress"].get("exec_summary") == "not_started":
+            eng["phase_progress"]["exec_summary"] = "in_progress"
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_exec_summary", engagement_id=engagement_id))
+
+    metrics = _compute_exec_metrics(eng)
+    action_plan = _build_action_plan(eng)
+    manifest = _deliverables_manifest(eng)
+    return render_template(
+        "exec_summary.html",
+        eng=eng,
+        metrics=metrics,
+        action_plan=action_plan,
+        manifest=manifest,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/exec-summary/finalize", methods=["POST"])
+def engagement_exec_summary_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_exec_summary(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["exec_summary"]["finalized"] = False
+        eng["exec_summary"]["finalized_at"] = None
+        eng["phase_progress"]["exec_summary"] = "in_progress"
+        eng["status"] = "exec_summary"
+    else:
+        eng["exec_summary"]["finalized"] = True
+        eng["exec_summary"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["exec_summary"] = "complete"
+        eng["status"] = "complete"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_exec_summary", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/exec-summary/briefing")
+def engagement_exec_summary_briefing(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_exec_summary(eng)
+    metrics = _compute_exec_metrics(eng)
+    action_plan = _build_action_plan(eng)
+    manifest = _deliverables_manifest(eng)
+    cat_label = {k: l for k, l in RECOMMENDATION_CATEGORIES}
+    status_label = {k: l for k, l in RECOMMENDATION_STATUSES}
+    return render_template(
+        "exec_briefing.html",
+        eng=eng,
+        metrics=metrics,
+        action_plan=action_plan,
+        manifest=manifest,
+        cat_label=cat_label,
+        status_label=status_label,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Phase 10 — Recommendations
 # ---------------------------------------------------------------------------
 
