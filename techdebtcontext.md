@@ -7,10 +7,15 @@ This file is the running log of decisions, work completed, and open questions fo
 ## Project at a glance
 
 - **Goal:** web-accessible dashboard implementing the 11-phase *Software Inventory, License Review, and Technical Debt Reduction Playbook*.
-- **Location:** `software_rationalization/` — a standalone app, separate from the parent TSMA assessment app.
+- **Local location:** `software_rationalization/` — a standalone app, separate from the parent TSMA assessment app.
+- **GitHub:** https://github.com/gene-png/tech-debt — mirror of `software_rationalization/` flattened to repo root (so a fresh clone runs `python app.py` directly).
 - **Stack:** Flask + Jinja2 + plain CSS. JSON file storage (one file per engagement under `data/`).
 - **Port:** 5055 — http://localhost:5055
 - **Run:** `cd software_rationalization && pip install -r requirements.txt && python app.py`
+
+## GitHub sync workflow
+
+The local working copy lives in this worktree under `software_rationalization/`. The GitHub repo at https://github.com/gene-png/tech-debt expects the **same files at the repo root** (no `software_rationalization/` prefix). To push updates, mirror the contents to a working clone and push. A scratch working copy used for the initial push lives at `C:/Users/pow_w/AppData/Local/Temp/tech-debt-push`. For long-term use, clone `tech-debt.git` somewhere permanent and treat that as the canonical pull/push target — the worktree copy here is convenient for iteration but the temp directory is ephemeral.
 
 ## Phase status
 
@@ -153,3 +158,10 @@ The 18 document types are defined in `DATA_REQUEST_TYPES` in `app.py`, matching 
 - New CSS: `.dr-summary` summary tiles, `.status-pill` status pills, `.file-list`, `.checklist-table`, `.btn-link`. `data/uploads/` added to `.gitignore`.
 - New `format_bytes` Jinja filter for file sizes.
 - Smoke test (Flask test client) exercised: auto-init, status update, customer message save, file upload (verified bytes round-trip via download), checklist HTML, checklist .txt, file delete (with auto status revert), finalize (verified phase_progress + status transitions), reopen, engagement view rendering. All 14 steps passed. Live server confirmed Phase 2 routes return 200 after Flask reloader picked up the changes.
+
+### 2026-04-27 — Initial GitHub publish
+
+- The worktree's `origin` was pointed at `gene-png/csf2-tool.git` (a different project), so adding `tech-debt` as a remote inside the worktree would have been confusing. Instead, the project was staged into a clean temp directory (`C:/Users/pow_w/AppData/Local/Temp/tech-debt-push`) with the `software_rationalization/` contents flattened to the root.
+- Verified the GitHub repo `gene-png/tech-debt` was empty, then ran `git init -b main`, added origin, committed everything (16 files), and pushed.
+- `git push -u origin main` succeeded; `git ls-remote` confirms `refs/heads/main` at commit `f90df8b9...`.
+- `data/` JSON files and `data/uploads/` were excluded by `.gitignore` so no customer data ever lands on GitHub.
