@@ -25,7 +25,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `0adbac0` (2026-04-27) — Refresh techdebtcontext.md to post-Phase-3 state.
 - `fd36790` (2026-04-28) — Phase 4: Normalize the Data (7 files changed, +816 lines).
 - `f4cbb98` (2026-04-28) — Backfill fd36790 commit hash in change log.
-- *(2026-04-28) Phase 5 build pending push.*
+- `e9a919b` (2026-04-28) — Phase 5: Identify Product Overlap (8 files changed, +605 lines).
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
