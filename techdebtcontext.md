@@ -24,6 +24,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `98d0bed` (2026-04-27) — Phase 3: Build the Software Inventory (10 files changed, +1097 lines).
 - `0adbac0` (2026-04-27) — Refresh techdebtcontext.md to post-Phase-3 state.
 - `fd36790` (2026-04-28) — Phase 4: Normalize the Data (7 files changed, +816 lines).
+- `f4cbb98` (2026-04-28) — Backfill fd36790 commit hash in change log.
+- *(2026-04-28) Phase 5 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -35,7 +37,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 2 | Request Customer Data          | **Live** |
 | 3 | Build the Software Inventory   | **Live** |
 | 4 | Normalize the Data             | **Live** |
-| 5 | Identify Product Overlap       | Planned  |
+| 5 | Identify Product Overlap       | **Live** |
 | 6 | AI Assisted Comparison         | Planned  |
 | 7 | Identify Technical Debt        | Planned  |
 | 8 | Estimate Cost Savings          | Planned  |
@@ -102,6 +104,18 @@ inventory: {                           ← Phase 3
 normalize: {                            ← Phase 4 (auto-init when inventory finalizes)
   ignored_issues: {
     "<issue_id>": { ignored_at, reason }
+  },
+  finalized, finalized_at,
+}
+
+overlap: {                              ← Phase 5
+  dispositions: {
+    "<product_id>": {
+      disposition,         ← keep | consolidate | retire | replace | renegotiate | further_review
+      risk_of_removal,     ← low | medium | high | unknown
+      notes,
+      updated_at,
+    }
   },
   finalized, finalized_at,
 }
@@ -196,6 +210,29 @@ The **Cleaned and Categorized Software Inventory** — Phase 4 doesn't produce a
 
 Finalize advances `status` to `overlap` and pre-marks Phase 5 as `in_progress`.
 
+## Phase 5 deliverable
+
+The **Product Overlap Analysis** — captures every category that has 2+ products, side-by-side comparison, and a per-product disposition decision. Available as:
+- Workspace: `/engagements/<id>/overlap`
+- Printable analysis: `/engagements/<id>/overlap/analysis`
+- CSV export: `/engagements/<id>/overlap/analysis.csv`
+
+**Disposition options** (per playbook):
+- `keep` — current state
+- `consolidate` — merge into another product in the same category
+- `retire` — remove without replacement
+- `replace` — swap for a different product
+- `renegotiate` — keep but renegotiate terms
+- `further_review` — undecided
+
+**Risk of removal:** `low` / `medium` / `high` / `unknown`.
+
+**Potential savings calculation:** sum of `total_annual_cost` across products marked `retire`, `replace`, or `consolidate` (controlled by `SAVINGS_DISPOSITIONS` in `app.py`). The summary tile updates as you save dispositions; the printable analysis bakes in the value at render time.
+
+**Form behaviour:** one form per category with all dispositions submitted together (a single "Save category decisions" button per panel). Submitting blank values for a product clears its entry from `overlap.dispositions`. Categories with only one product are not shown — they're not overlap candidates.
+
+Finalize advances `status` to `ai_review` and pre-marks Phase 6 as `in_progress`.
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -227,6 +264,10 @@ Finalize advances `status` to `overlap` and pre-marks Phase 5 as `in_progress`.
 | `/engagements/<id>/normalize/merge-duplicates` | POST | Phase 4 — merge duplicate cluster |
 | `/engagements/<id>/normalize/ignore` | POST | Phase 4 — ignore / un-ignore finding |
 | `/engagements/<id>/normalize/finalize` | POST | Phase 4 — finalize / reopen |
+| `/engagements/<id>/overlap` | GET / POST | Phase 5 — overlap workspace + save category dispositions |
+| `/engagements/<id>/overlap/finalize` | POST | Phase 5 — finalize / reopen |
+| `/engagements/<id>/overlap/analysis` | GET | Phase 5 deliverable (printable HTML) |
+| `/engagements/<id>/overlap/analysis.csv` | GET | Phase 5 deliverable (CSV) |
 
 ## Decisions made
 
@@ -258,8 +299,9 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 2 — static checklist or real uploads?~~ **Resolved: real uploads with on-disk storage.**
 - ~~Inventory build (Phase 3) — manual entry first, or CSV/XLSX import first?~~ **Resolved: both. Manual add form + CSV/XLSX import with fuzzy column matching.**
 - ~~Phase 4 (Normalize) — separate review pass or inline?~~ **Resolved: separate review pass. Eight detectors run live each load, producing findings with stable issue IDs. One-click apply for vendor / category / merge; "ignore with reason" for false positives; remaining findings link to the product editor.**
+- ~~Phase 5 (Identify Overlap) — per-category comparison?~~ **Resolved: yes. Categories with 2+ products surface as overlap candidates; per-product disposition selector + risk + notes; potential savings computed from Retire/Replace/Consolidate dispositions; printable analysis + CSV export.**
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
-- Phase 5 (Identify Overlap) — overlap is a category-level question ("two project management tools, one wins"). Likely a per-category breakdown showing all products in that category side-by-side with cost / users / contract status, plus per-product disposition (Keep / Consolidate / Retire / Replace / Renegotiate / Further review).
+- Phase 6 (AI Assisted Comparison) — uses the Anthropic SDK over the inventory + Phase 2 documents. The natural design: a single "Run AI review" button that bundles the inventory + the recommended Phase 6 prompt to Claude, stores the response, and renders findings grouped by category. Need to think about: token budget when there are many uploaded documents, per-engagement cost guardrails, and how to surface AI suggestions without making them auto-applied.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -322,3 +364,13 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - New template `normalize.html`: summary tiles for each finding category, separate sections for duplicates (with merge form), vendor variants (with canonical-name input), unmapped categories (with mapping select), license anomalies, missing data (sub-grouped: ownership / cost / uncategorized / unclear use), an "Ignored findings" panel, and a finalize button.
 - New CSS: `.finding`, `.finding-header`, `.finding-table`. `_sidebar.html` enables Phase 4 link, `engagement_view.html` surfaces a Phase 4 panel, `home.html` marks Phase 4 as Live.
 - Smoke test (Flask test client, file-based to dodge bash-quoting headaches): seeded 8 specimen products covering all eight detector cases. Verified counts (1 dup, ≥1 vendor variant, 1 unmapped cat, 1 each missing-owner / cost / use case / uncategorized, 2 license anomalies). Applied vendor standardization → both Microsoft variants merged. Applied category standardization → Wiki/KB → Document management. Merged duplicate Slack pair → 1 Slack row left. Ignored a license anomaly → count drops by 1, ignored_count rises; un-ignore reverses both. Finalize advanced engagement to Phase 5 and pre-marked overlap as `in_progress`. Reopen reverses. Live server confirmed `/normalize` returns 200 after reloader picked up changes.
+
+### 2026-04-28 — Phase 5 build (Identify Product Overlap)
+
+- Added Phase 5 constants to `app.py`: `DISPOSITIONS` (6 options matching the playbook), `REMOVAL_RISKS` (4 levels), `SAVINGS_DISPOSITIONS` (the three that imply cost reduction).
+- Helpers: `_ensure_overlap`, `_safe_float` / `_safe_int` (defensive numeric coercion for inventory fields that may be strings), `_overlap_clusters` (groups by category, only returns clusters of 2+ with annual/users/licenses rollups), `_overlap_summary` (engagement-wide rollup including potential savings + decisions made / undecided).
+- Routes: `engagement_overlap` (GET + POST that takes a multi-row category form via `getlist("product_id")` + per-product `disposition_<id>` / `risk_<id>` / `notes_<id>` fields; clears entry if all three are blank), `engagement_overlap_finalize`, `engagement_overlap_analysis` (printable HTML), `engagement_overlap_analysis_csv`.
+- New templates: `overlap.html` (5 summary tiles, per-category form panel with side-by-side comparison table, row-shading for keep/savings rows, finalize panel) and `overlap_analysis.html` (printable: summary table + per-category details + disposition definitions reference).
+- Updated `_sidebar.html` (Phase 5 link), `engagement_view.html` (Phase 5 panel with workspace + analysis links), `home.html` (Phase 5 marked Live).
+- New CSS: `.overlap-cluster-header`, `.overlap-form` / `.overlap-scroll`, `.overlap-table` with `.row-keep` (green tint) and `.row-savings` (yellow tint) row shading, condensed select/input styling inside the table.
+- Smoke test (Flask test client, file-based): seeded 6 products with 2 overlap categories (3 PM tools + 2 collab tools) and 1 solo product. Verified `_overlap_summary` initial counts ($9,150 annual in overlap across 5 products in 2 categories). Saved PM dispositions (Keep/Retire/Consolidate) → potential savings = $1,300 (Asana $1k + Trello $300). Saved collab dispositions → decided_count = 5/5. Cleared Trello (blank submission) → entry removed from `dispositions`, savings drop to $1,000. Printable analysis renders with all expected strings. CSV export has 6 rows (header + 5 overlap products). Finalize advances engagement to Phase 6 (`ai_review` pre-marked `in_progress`); reopen reverses. Caught and fixed: Werkzeug test client wants dict-with-list-values for repeated form fields, not list-of-tuples.

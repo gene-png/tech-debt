@@ -105,11 +105,32 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 5 — Identify Product Overlap</h2>
+      {% set ov = eng.get('overlap') %}
+      {% if ov and ov.finalized %}
+        <div class="notice">Phase 5 finalized on {{ ov.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.overlap == 'in_progress' %}
+        <div class="notice warn">Overlap analysis in progress.</div>
+      {% else %}
+        <div class="notice warn">Overlap analysis has not been started.</div>
+      {% endif %}
+      <p class="helper">Per-category side-by-side comparison with disposition selector (Keep / Consolidate / Retire / Replace / Renegotiate / Further review).</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_overlap', engagement_id=eng.id) }}">
+          {% if ov and ov.finalized %}Review overlap{% else %}Open overlap workspace{% endif %}
+        </a>
+        {% if ov and ov.dispositions %}
+          <a class="btn secondary" href="{{ url_for('engagement_overlap_analysis', engagement_id=eng.id) }}">View overlap analysis</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 5 through 11 of the playbook will activate in upcoming releases — Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 6 through 11 of the playbook will activate in upcoming releases — AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

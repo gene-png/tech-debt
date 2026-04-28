@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %}Identify overlap · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'overlap' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 5 — Identify Product Overlap</h1>
+      <p class="lead">Compare products in the same category side by side and decide what to do with each one. Categories with two or more products are overlap candidates.</p>
+
+      {% set ov = eng.overlap %}
+      {% if ov.finalized %}
+        <div class="notice">Phase 5 finalized on {{ ov.finalized_at[:10] }}. Reopen below to keep editing.</div>
+      {% endif %}
+      {% if not eng.inventory or not eng.inventory.products %}
+        <div class="notice warn">No inventory yet. <a href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Build the inventory in Phase 3</a> first.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.category_count }}</div><div class="lbl">Overlap categories</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.products_in_overlap }}</div><div class="lbl">Products in overlap</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.annual_in_overlap | money }}</div><div class="lbl">Annual cost in overlap</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.potential_savings | money }}</div><div class="lbl">Potential savings</div></div>
+        <div class="summary-tile {% if summary.undecided_count == 0 %}good{% endif %}">
+          <div class="num">{{ summary.decided_count }} / {{ summary.products_in_overlap }}</div>
+          <div class="lbl">Decisions made</div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('engagement_overlap_analysis', engagement_id=eng.id) }}">View overlap analysis (printable)</a>
+        <a class="btn secondary" href="{{ url_for('engagement_overlap_analysis_csv', engagement_id=eng.id) }}">Download analysis (.csv)</a>
+      </div>
+
+      <p class="helper" style="margin-top: 12px;">
+        Disposition options: <strong>Keep</strong> · <strong>Consolidate</strong> · <strong>Retire</strong> · <strong>Replace</strong> · <strong>Renegotiate</strong> · <strong>Further review required</strong>. The potential savings tile sums annual cost from products marked <em>Retire</em>, <em>Replace</em>, or <em>Consolidate</em>.
+      </p>
+    </div>
+
+    {% if not clusters %}
+      <div class="panel">
+        <div class="empty">
+          {% if eng.inventory and eng.inventory.products %}
+            No overlap detected — every product is in its own category. You can finalize Phase 5 below to record this conclusion.
+          {% else %}
+            Add products to the inventory first.
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% for cluster in clusters %}
+      <div class="panel" id="category-{{ loop.index }}">
+        <div class="overlap-cluster-header">
+          <h2 class="inline">{{ cluster.category }}</h2>
+          <span class="meta">{{ cluster.products | length }} products · {{ cluster.users_total }} users · {{ cluster.licenses_total }} licenses · {{ cluster.annual_total | money }}/yr</span>
+        </div>
+        <form method="post" class="overlap-form">
+          <div class="overlap-scroll">
+            <table class="overlap-table">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Vendor</th>
+                  <th class="num">Users</th>
+                  <th class="num">Lic. P / A</th>
+                  <th class="num">Annual cost</th>
+                  <th>Renewal</th>
+                  <th>Contract term</th>
+                  <th style="width: 170px;">Disposition</th>
+                  <th style="width: 110px;">Risk</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for p in cluster.products %}
+                  {% set d = dispositions.get(p.id, {}) %}
+                  {% set is_savings = d.disposition in savings_dispositions %}
+                  <tr class="{% if d.disposition == 'keep' %}row-keep{% elif is_savings %}row-savings{% endif %}">
+                    <td>
+                      <input type="hidden" name="product_id" value="{{ p.id }}">
+                      <a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">{{ p.product_name }}</a>
+                      {% if p.version %}<div class="meta">{{ p.version }}</div>{% endif %}
+                    </td>
+                    <td>{{ p.vendor }}</td>
+                    <td class="num">{{ p.active_users }}</td>
+                    <td class="num">{{ p.licenses_purchased }}{% if p.licenses_assigned %} / {{ p.licenses_assigned }}{% endif %}</td>
+                    <td class="num">{{ p.total_annual_cost | money }}</td>
+                    <td>{{ p.renewal_date }}</td>
+                    <td>{{ p.contract_term }}</td>
+                    <td>
+                      <select name="disposition_{{ p.id }}">
+                        <option value="">—</option>
+                        {% for k, l in disposition_options %}
+                          <option value="{{ k }}" {% if d.disposition == k %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td>
+                      <select name="risk_{{ p.id }}">
+                        <option value="">—</option>
+                        {% for k, l in risk_options %}
+                          <option value="{{ k }}" {% if d.risk_of_removal == k %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                      </select>
+                    </td>
+                    <td>
+                      <input type="text" name="notes_{{ p.id }}" value="{{ d.notes or '' }}" placeholder="rationale, dependencies, owner ask…">
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="actions">
+            <button class="btn" type="submit">Save category decisions</button>
+          </div>
+        </form>
+      </div>
+    {% endfor %}
+
+    <div class="panel">
+      <h2>Finalize Phase 5</h2>
+      <p class="helper">Lock the overlap analysis once you've recorded a disposition for each product in overlap. Phase 6 (AI Assisted Comparison) activates next. You can reopen later.</p>
+      <form method="post" action="{{ url_for('engagement_overlap_finalize', engagement_id=eng.id) }}">
+        {% if ov.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 5</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 5</button>
+          {% if summary.undecided_count > 0 %}
+            <span class="helper" style="margin-left: 10px;">{{ summary.undecided_count }} product{{ '' if summary.undecided_count == 1 else 's' }} in overlap still without a disposition.</span>
+          {% endif %}
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

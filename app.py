@@ -49,6 +49,27 @@ DATA_REQUEST_STATUSES = [
     ("waived", "Waived"),
 ]
 
+# Phase 5 — Identify Overlap --------------------------------------------------
+
+DISPOSITIONS = [
+    ("keep", "Keep"),
+    ("consolidate", "Consolidate"),
+    ("retire", "Retire"),
+    ("replace", "Replace"),
+    ("renegotiate", "Renegotiate"),
+    ("further_review", "Further review required"),
+]
+
+REMOVAL_RISKS = [
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+    ("unknown", "Unknown"),
+]
+
+# Dispositions that imply a product would no longer cost money once acted on.
+SAVINGS_DISPOSITIONS = {"retire", "replace", "consolidate"}
+
 # Phase 3 — Build Inventory ---------------------------------------------------
 
 PRODUCT_CATEGORIES = [
@@ -1501,6 +1522,229 @@ def engagement_normalize_finalize(engagement_id):
             eng["phase_progress"]["overlap"] = "in_progress"
     storage.save_engagement(eng)
     return redirect(url_for("engagement_normalize", engagement_id=engagement_id))
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Identify Product Overlap
+# ---------------------------------------------------------------------------
+
+def _ensure_overlap(eng):
+    if "overlap" in eng and "dispositions" in eng["overlap"]:
+        return False
+    eng["overlap"] = {
+        "dispositions": {},  # product_id -> {disposition, risk_of_removal, notes, updated_at}
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _safe_float(v):
+    try:
+        return float(v) if v not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_int(v):
+    try:
+        return int(v) if v not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _overlap_clusters(products):
+    """Group products by category. Categories with 2+ products are overlap clusters."""
+    groups = {}
+    for p in products:
+        cat = (p.get("category") or "Uncategorized").strip() or "Uncategorized"
+        groups.setdefault(cat, []).append(p)
+    clusters = []
+    for cat, members in sorted(groups.items()):
+        if len(members) >= 2:
+            annual = sum(_safe_float(p.get("total_annual_cost")) for p in members)
+            users = sum(_safe_int(p.get("active_users")) for p in members)
+            licenses = sum(_safe_int(p.get("licenses_purchased")) for p in members)
+            clusters.append({
+                "category": cat,
+                "products": members,
+                "annual_total": annual,
+                "users_total": users,
+                "licenses_total": licenses,
+            })
+    return clusters
+
+
+def _overlap_summary(eng):
+    products = eng.get("inventory", {}).get("products", [])
+    clusters = _overlap_clusters(products)
+    overlap_pids = {p["id"] for c in clusters for p in c["products"]}
+    annual_in_overlap = 0.0
+    for p in products:
+        if p["id"] in overlap_pids:
+            annual_in_overlap += _safe_float(p.get("total_annual_cost"))
+
+    dispositions = eng.get("overlap", {}).get("dispositions", {})
+    potential_savings = 0.0
+    decided = 0
+    products_by_id = {p["id"]: p for p in products}
+    for pid in overlap_pids:
+        d = dispositions.get(pid, {}).get("disposition", "")
+        if d:
+            decided += 1
+        if d in SAVINGS_DISPOSITIONS and pid in products_by_id:
+            potential_savings += _safe_float(products_by_id[pid].get("total_annual_cost"))
+
+    return {
+        "category_count": len(clusters),
+        "products_in_overlap": len(overlap_pids),
+        "annual_in_overlap": annual_in_overlap,
+        "potential_savings": potential_savings,
+        "decided_count": decided,
+        "undecided_count": len(overlap_pids) - decided,
+    }
+
+
+@app.route("/engagements/<engagement_id>/overlap", methods=["GET", "POST"])
+def engagement_overlap(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_overlap(eng):
+        if (eng["phase_progress"].get("normalize") == "complete"
+                and eng["phase_progress"].get("overlap") == "not_started"):
+            eng["phase_progress"]["overlap"] = "in_progress"
+        storage.save_engagement(eng)
+
+    if request.method == "POST":
+        product_ids = request.form.getlist("product_id")
+        valid_dispositions = dict(DISPOSITIONS)
+        valid_risks = dict(REMOVAL_RISKS)
+        now = datetime.utcnow().isoformat() + "Z"
+        for pid in product_ids:
+            disp = request.form.get(f"disposition_{pid}", "").strip()
+            risk = request.form.get(f"risk_{pid}", "").strip()
+            notes = request.form.get(f"notes_{pid}", "").strip()
+            if disp and disp not in valid_dispositions:
+                disp = ""
+            if risk and risk not in valid_risks:
+                risk = ""
+            if not (disp or risk or notes):
+                eng["overlap"]["dispositions"].pop(pid, None)
+                continue
+            eng["overlap"]["dispositions"][pid] = {
+                "disposition": disp,
+                "risk_of_removal": risk,
+                "notes": notes,
+                "updated_at": now,
+            }
+        if eng["phase_progress"].get("overlap") == "not_started":
+            eng["phase_progress"]["overlap"] = "in_progress"
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_overlap", engagement_id=engagement_id))
+
+    products = eng.get("inventory", {}).get("products", [])
+    clusters = _overlap_clusters(products)
+    summary = _overlap_summary(eng)
+    return render_template(
+        "overlap.html",
+        eng=eng,
+        clusters=clusters,
+        summary=summary,
+        dispositions=eng["overlap"]["dispositions"],
+        disposition_options=DISPOSITIONS,
+        risk_options=REMOVAL_RISKS,
+        savings_dispositions=SAVINGS_DISPOSITIONS,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/overlap/finalize", methods=["POST"])
+def engagement_overlap_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_overlap(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["overlap"]["finalized"] = False
+        eng["overlap"]["finalized_at"] = None
+        eng["phase_progress"]["overlap"] = "in_progress"
+        eng["status"] = "overlap"
+    else:
+        eng["overlap"]["finalized"] = True
+        eng["overlap"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["overlap"] = "complete"
+        eng["status"] = "ai_review"
+        if eng["phase_progress"].get("ai_review") == "not_started":
+            eng["phase_progress"]["ai_review"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_overlap", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/overlap/analysis")
+def engagement_overlap_analysis(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_overlap(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    clusters = _overlap_clusters(products)
+    summary = _overlap_summary(eng)
+    return render_template(
+        "overlap_analysis.html",
+        eng=eng,
+        clusters=clusters,
+        summary=summary,
+        dispositions=eng["overlap"]["dispositions"],
+        disposition_label=dict(DISPOSITIONS),
+        risk_label=dict(REMOVAL_RISKS),
+        savings_dispositions=SAVINGS_DISPOSITIONS,
+    )
+
+
+@app.route("/engagements/<engagement_id>/overlap/analysis.csv")
+def engagement_overlap_analysis_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_overlap(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    clusters = _overlap_clusters(products)
+    dispositions = eng["overlap"]["dispositions"]
+    disposition_label = dict(DISPOSITIONS)
+    risk_label = dict(REMOVAL_RISKS)
+
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([
+        "Category", "Product", "Vendor", "Active users", "Licenses purchased",
+        "Licenses assigned", "Annual cost", "Renewal date", "Contract term",
+        "Disposition", "Risk of removal", "Notes",
+    ])
+    for c in clusters:
+        for p in c["products"]:
+            d = dispositions.get(p["id"], {})
+            writer.writerow([
+                c["category"],
+                p.get("product_name", ""),
+                p.get("vendor", ""),
+                p.get("active_users", ""),
+                p.get("licenses_purchased", ""),
+                p.get("licenses_assigned", ""),
+                p.get("total_annual_cost", ""),
+                p.get("renewal_date", ""),
+                p.get("contract_term", ""),
+                disposition_label.get(d.get("disposition", ""), ""),
+                risk_label.get(d.get("risk_of_removal", ""), ""),
+                d.get("notes", ""),
+            ])
+    fn = f"product-overlap-analysis-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
 
 
 @app.template_filter("money")

@@ -40,7 +40,7 @@
       <p class="helper">The end-to-end flow this workbench will support. Items marked Live are available now.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% set is_live = key in ('scope', 'data_request', 'inventory', 'normalize') %}
+          {% set is_live = key in ('scope', 'data_request', 'inventory', 'normalize', 'overlap') %}
           <li>
             <span class="phase-dot {{ 'status-progress' if is_live else 'status-pending' }}"></span>
             <span>{{ label }}</span>

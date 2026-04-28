@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Overlap analysis · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_overlap', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_overlap_analysis_csv', engagement_id=eng.id) }}">Download .csv</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+<article class="statement">
+  <h1>Product Overlap Analysis</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}{% if eng.overlap.finalized_at %} · Finalized {{ eng.overlap.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Summary</h2>
+  <table class="checklist-table">
+    <tbody>
+      <tr><td>Overlap categories</td><td><strong>{{ summary.category_count }}</strong></td></tr>
+      <tr><td>Products in overlap</td><td><strong>{{ summary.products_in_overlap }}</strong></td></tr>
+      <tr><td>Annual cost in overlap</td><td><strong>{{ summary.annual_in_overlap | money }}</strong></td></tr>
+      <tr><td>Potential savings (Retire / Replace / Consolidate)</td><td><strong>{{ summary.potential_savings | money }}</strong></td></tr>
+      <tr><td>Decisions recorded</td><td><strong>{{ summary.decided_count }} of {{ summary.products_in_overlap }}</strong></td></tr>
+    </tbody>
+  </table>
+
+  {% if not clusters %}
+    <h2>No overlap detected</h2>
+    <p>Every product in the inventory occupies its own category. There is no overlap to act on at this time.</p>
+  {% endif %}
+
+  {% for cluster in clusters %}
+    <h2>{{ cluster.category }}</h2>
+    <p class="meta-line">{{ cluster.products | length }} products · {{ cluster.users_total }} active users · {{ cluster.licenses_total }} licenses · combined annual cost {{ cluster.annual_total | money }}</p>
+    <table class="checklist-table">
+      <thead>
+        <tr>
+          <th>Product</th>
+          <th>Vendor</th>
+          <th>Users</th>
+          <th>Annual cost</th>
+          <th>Renewal</th>
+          <th>Disposition</th>
+          <th>Risk</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in cluster.products %}
+          {% set d = dispositions.get(p.id, {}) %}
+          <tr>
+            <td><strong>{{ p.product_name }}</strong>{% if p.version %} <span class="meta">{{ p.version }}</span>{% endif %}</td>
+            <td>{{ p.vendor }}</td>
+            <td>{{ p.active_users }}</td>
+            <td>{{ p.total_annual_cost | money }}</td>
+            <td>{{ p.renewal_date }}</td>
+            <td>
+              {% if d.disposition %}
+                <strong>{{ disposition_label.get(d.disposition, d.disposition) }}</strong>
+              {% else %}
+                <em>(undecided)</em>
+              {% endif %}
+            </td>
+            <td>{{ risk_label.get(d.risk_of_removal, '') }}</td>
+            <td>{{ d.notes }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+
+  <h2>Disposition definitions</h2>
+  <ul>
+    <li><strong>Keep</strong> — current state, no change.</li>
+    <li><strong>Consolidate</strong> — merge usage into one of the other products in this category.</li>
+    <li><strong>Retire</strong> — remove without replacement.</li>
+    <li><strong>Replace</strong> — swap for a different product.</li>
+    <li><strong>Renegotiate</strong> — keep the product but renegotiate terms (price, seats, contract length).</li>
+    <li><strong>Further review required</strong> — undecided pending stakeholder input.</li>
+  </ul>
+</article>
+{% endblock %}

@@ -548,3 +548,60 @@ input:focus, textarea:focus, select:focus {
 .finding-table .meta { font-size: 11px; color: var(--muted); }
 
 .merge-form { margin: 0; }
+
+/* ---------- Phase 5: overlap ---------- */
+
+.overlap-cluster-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.overlap-cluster-header h2.inline {
+  border: none;
+  padding: 0;
+  margin: 0;
+  font-size: 16px;
+}
+.overlap-cluster-header .meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.overlap-form { margin: 0; }
+.overlap-scroll {
+  overflow-x: auto;
+  margin: 0 -24px;
+}
+.overlap-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 1200px;
+}
+.overlap-table th,
+.overlap-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.overlap-table th {
+  background: #f5f6f8;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.overlap-table th.num,
+.overlap-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.overlap-table tr:last-child td { border-bottom: none; }
+.overlap-table tbody tr.row-keep td { background: rgba(31, 139, 74, 0.04); }
+.overlap-table tbody tr.row-savings td { background: rgba(184, 135, 10, 0.06); }
+.overlap-table .meta { font-size: 11px; color: var(--muted); }
+.overlap-table select,
+.overlap-table input[type=text] {
+  padding: 5px 7px;
+  font-size: 12px;
+}
