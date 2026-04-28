@@ -19,11 +19,13 @@
           <a href="{{ url_for('engagement_scope', engagement_id=eng.id) }}">{{ label }}</a>
         {% elif key == 'data_request' %}
           <a href="{{ url_for('engagement_data_request', engagement_id=eng.id) }}">{{ label }}</a>
+        {% elif key == 'inventory' %}
+          <a href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">{{ label }}</a>
         {% else %}
           <span style="opacity: 0.6;">{{ label }}</span>
         {% endif %}
       </li>
     {% endfor %}
   </ul>
-  <p class="helper" style="margin-top: 10px;">Phases 1 and 2 are live. Phases 3–11 are part of the playbook roadmap and will activate in future releases.</p>
+  <p class="helper" style="margin-top: 10px;">Phases 1 through 3 are live. Phases 4–11 are part of the playbook roadmap and will activate in future releases.</p>
 </aside>

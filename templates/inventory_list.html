@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Inventory · {{ eng.name }}{% endblock %}
+{% macro sort_link(key, label) -%}
+  {% set is_active = sort_key == key %}
+  {% set next_dir = 'desc' if (is_active and sort_dir == 'asc') else 'asc' %}
+  <a href="{{ url_for('engagement_inventory', engagement_id=eng.id, sort=key, dir=next_dir, q=q, category=category_filter) }}" class="sort-link {{ 'active' if is_active }}">
+    {{ label }}{% if is_active %} {{ '▲' if sort_dir == 'asc' else '▼' }}{% endif %}
+  </a>
+{%- endmacro %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'inventory' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 3 — Build the Software Inventory</h1>
+      <p class="lead">Capture every product, license, and subscription in scope. Add manually or import a customer-supplied CSV/XLSX. The deliverable for this phase is the <strong>Master Software Inventory</strong>.</p>
+
+      {% set inv = eng.inventory %}
+      {% if not eng.scope.finalized %}
+        <div class="notice warn">Phase 1 (Define the Scope) has not been finalized. Lock the scope baseline first if you want the inventory tied to a specific scope decision.</div>
+      {% endif %}
+      {% if inv.finalized %}
+        <div class="notice">Phase 3 finalized on {{ inv.finalized_at[:10] }}. Reopen below to edit the inventory.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.count }}</div><div class="lbl">Products</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.annual_cost | money }}</div><div class="lbl">Annual spend</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.licenses_purchased }}</div><div class="lbl">Licenses purchased</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.licenses_assigned }}</div><div class="lbl">Licenses assigned</div></div>
+      </div>
+
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_inventory_new', engagement_id=eng.id) }}">+ Add product</a>
+        <a class="btn secondary" href="{{ url_for('engagement_inventory_import', engagement_id=eng.id) }}">Import CSV / XLSX</a>
+        <a class="btn secondary" href="{{ url_for('engagement_inventory_export_xlsx', engagement_id=eng.id) }}">Export XLSX</a>
+        <a class="btn secondary" href="{{ url_for('engagement_inventory_export_csv', engagement_id=eng.id) }}">Export CSV</a>
+        <a class="btn secondary" href="{{ url_for('engagement_inventory_template_csv', engagement_id=eng.id) }}">Blank CSV template</a>
+      </div>
+    </div>
+
+    <div class="panel">
+      <form method="get" class="inventory-filters">
+        <div class="row" style="align-items: end;">
+          <div class="col">
+            <label>Search</label>
+            <input type="text" name="q" value="{{ q or '' }}" placeholder="Product, vendor, owner, notes…">
+          </div>
+          <div class="col" style="flex: 0 0 240px;">
+            <label>Category</label>
+            <select name="category">
+              <option value="">All categories</option>
+              {% for c in categories %}
+                <option value="{{ c }}" {% if c == category_filter %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <input type="hidden" name="sort" value="{{ sort_key }}">
+          <input type="hidden" name="dir" value="{{ sort_dir }}">
+          <div class="col" style="flex: 0 0 110px;">
+            <button class="btn secondary" type="submit">Filter</button>
+          </div>
+          {% if q or category_filter %}
+            <div class="col" style="flex: 0 0 80px;">
+              <a class="btn-link" href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">clear</a>
+            </div>
+          {% endif %}
+        </div>
+      </form>
+
+      {% if products %}
+      <div class="inventory-scroll">
+        <table class="inventory-table">
+          <thead>
+            <tr>
+              <th>{{ sort_link('product_name', 'Product') }}</th>
+              <th>{{ sort_link('vendor', 'Vendor') }}</th>
+              <th>{{ sort_link('category', 'Category') }}</th>
+              <th class="num">{{ sort_link('licenses_purchased', 'Lic. purch.') }}</th>
+              <th class="num">{{ sort_link('licenses_assigned', 'Lic. asgn.') }}</th>
+              <th class="num">{{ sort_link('active_users', 'Users') }}</th>
+              <th class="num">{{ sort_link('total_annual_cost', 'Annual cost') }}</th>
+              <th>{{ sort_link('renewal_date', 'Renewal') }}</th>
+              <th>{{ sort_link('deployment_model', 'Deployment') }}</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in products %}
+              <tr>
+                <td>
+                  <strong><a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">{{ p.product_name }}</a></strong>
+                  {% if p.version %}<div class="meta">{{ p.version }}</div>{% endif %}
+                </td>
+                <td>{{ p.vendor }}</td>
+                <td>{% if p.category %}<span class="tag cat">{{ p.category }}</span>{% endif %}</td>
+                <td class="num">{{ p.licenses_purchased }}</td>
+                <td class="num">{{ p.licenses_assigned }}</td>
+                <td class="num">{{ p.active_users }}</td>
+                <td class="num">{{ p.total_annual_cost | money }}</td>
+                <td>{{ p.renewal_date }}</td>
+                <td>{{ p.deployment_model }}</td>
+                <td class="row-actions">
+                  <a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}">edit</a>
+                  <form method="post" action="{{ url_for('engagement_inventory_delete', engagement_id=eng.id, product_id=p.id) }}" class="inline-form" onsubmit="return confirm('Delete this product?');">
+                    <button class="btn-link danger" type="submit">delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+        <div class="empty">
+          {% if q or category_filter %}
+            No products match the current filter.
+          {% else %}
+            No products yet. <a href="{{ url_for('engagement_inventory_new', engagement_id=eng.id) }}">Add your first product</a> or <a href="{{ url_for('engagement_inventory_import', engagement_id=eng.id) }}">import a CSV</a>.
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if summary.by_category %}
+      <div class="panel">
+        <h2>By category</h2>
+        <ul class="category-rollup">
+          {% for cat, count in summary.by_category %}
+            <li><span class="tag cat">{{ cat }}</span> {{ count }} product{{ '' if count == 1 else 's' }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+
+    <div class="panel">
+      <h2>Finalize Phase 3</h2>
+      <p class="helper">Lock the inventory once the master list is complete. Phase 4 (Normalize) activates when finalized. You can reopen later.</p>
+      <form method="post" action="{{ url_for('engagement_inventory_finalize', engagement_id=eng.id) }}">
+        {% if inv.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 3</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);" {% if summary.count == 0 %}disabled{% endif %}>Finalize Phase 3</button>
+          {% if summary.count == 0 %}<span class="helper" style="margin-left: 10px;">Add at least one product first.</span>{% endif %}
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

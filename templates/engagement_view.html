@@ -64,11 +64,34 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 3 — Build the Software Inventory</h2>
+      {% set inv = eng.get('inventory') %}
+      {% if inv and inv.finalized %}
+        <div class="notice">Phase 3 finalized on {{ inv.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.inventory == 'in_progress' %}
+        <div class="notice warn">Inventory is being built.</div>
+      {% else %}
+        <div class="notice warn">Inventory has not been started.</div>
+      {% endif %}
+      {% if inv %}
+        <p class="helper">{{ inv.products | length }} product(s) captured.</p>
+      {% endif %}
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">
+          {% if inv and inv.finalized %}Review inventory{% else %}Build inventory{% endif %}
+        </a>
+        {% if inv and inv.products | length %}
+          <a class="btn secondary" href="{{ url_for('engagement_inventory_export_xlsx', engagement_id=eng.id) }}">Export master inventory (XLSX)</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 3 through 11 of the playbook will activate in upcoming releases — Inventory Build, Normalization, Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 4 through 11 of the playbook will activate in upcoming releases — Normalization, Overlap Detection, AI Comparison, Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request') %}
+          {% if key not in ('scope', 'data_request', 'inventory') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

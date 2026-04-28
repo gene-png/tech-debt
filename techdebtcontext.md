@@ -23,7 +23,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 |---|--------------------------------|----------|
 | 1 | Define the Scope               | **Live** |
 | 2 | Request Customer Data          | **Live** |
-| 3 | Build the Software Inventory   | Planned  |
+| 3 | Build the Software Inventory   | **Live** |
 | 4 | Normalize the Data             | Planned  |
 | 5 | Identify Product Overlap       | Planned  |
 | 6 | AI Assisted Comparison         | Planned  |
@@ -71,6 +71,23 @@ data_request: {                        ← Phase 2 (auto-initialized on first vi
   customer_message,
   finalized, finalized_at,
 }
+
+inventory: {                           ← Phase 3
+  products: [
+    {
+      id, created_at, updated_at,
+      product_name, vendor, version, category,
+      business_owner, technical_owner, contract_owner,
+      licenses_purchased, licenses_assigned, active_users,
+      cost_per_license, total_annual_cost,
+      renewal_date, contract_term, purchase_source,
+      deployment_model, primary_use_case, systems_supported,
+      data_sensitivity, security_compliance,
+      known_risks, notes,
+    }
+  ],
+  finalized, finalized_at,
+}
 ```
 
 Future phases will add new top-level keys (e.g. `inventory`, `overlap`, `tech_debt`, `recommendations`) without touching existing fields.
@@ -105,6 +122,26 @@ Behaviours worth noting:
 
 The 18 document types are defined in `DATA_REQUEST_TYPES` in `app.py`, matching the playbook list verbatim.
 
+## Phase 3 deliverable
+
+The **Master Software Inventory** is the deliverable for Phase 3. Available as:
+- Web view: `/engagements/<id>/inventory` (sortable / filterable table, summary tiles for product count, annual spend, licenses purchased / assigned, by-category rollup)
+- CSV export: `/engagements/<id>/inventory/export.csv`
+- XLSX export (formatted, frozen header): `/engagements/<id>/inventory/export.xlsx`
+- Blank CSV template for customers preparing data: `/engagements/<id>/inventory/template.csv`
+
+CRUD operations:
+- Add: `/engagements/<id>/inventory/new`
+- Edit: `/engagements/<id>/inventory/<product_id>/edit`
+- Delete: POST `/engagements/<id>/inventory/<product_id>/delete`
+- Import (CSV or XLSX, fuzzy column-header matching): `/engagements/<id>/inventory/import`
+
+The 22 master inventory fields and their CSV header aliases live in `PRODUCT_FIELDS` and `PRODUCT_FIELD_ALIASES` in `app.py`. Column-header matching is case- and whitespace-insensitive — a column called "Annual Cost", "annual_cost", or "Yearly Cost" all map to `total_annual_cost`. Rows missing a product name are skipped and counted in the import result.
+
+Auto-calc behaviour: if `total_annual_cost` is blank but `cost_per_license` and `licenses_purchased` are both present, the total is computed on save / import.
+
+Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`. Reopen reverts.
+
 ## Decisions made
 
 - **Standalone app** under `software_rationalization/`, separate from the parent TSMA Flask app — keeps concerns clean and avoids touching existing TSMA storage/templates.
@@ -127,8 +164,9 @@ The 18 document types are defined in `DATA_REQUEST_TYPES` in `app.py`, matching 
 ## Open questions / next decisions
 
 - ~~Phase 2 — static checklist or real uploads?~~ **Resolved: real uploads with on-disk storage.**
+- ~~Inventory build (Phase 3) — manual entry first, or CSV/XLSX import first?~~ **Resolved: both. Manual add form + CSV/XLSX import with fuzzy column matching.**
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
-- Inventory build (Phase 3) — manual entry first, or CSV/XLSX import first? Probably CSV import since the customer typically has spreadsheets, plus a manual add row for one-offs.
+- Phase 4 (Normalize) — should this be a separate review pass or inline in the inventory page? Probably a guided workflow that flags duplicate vendor names, unrecognized categories, and missing ownership in batch with a single "apply suggestions" action.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -165,3 +203,14 @@ The 18 document types are defined in `DATA_REQUEST_TYPES` in `app.py`, matching 
 - Verified the GitHub repo `gene-png/tech-debt` was empty, then ran `git init -b main`, added origin, committed everything (16 files), and pushed.
 - `git push -u origin main` succeeded; `git ls-remote` confirms `refs/heads/main` at commit `f90df8b9...`.
 - `data/` JSON files and `data/uploads/` were excluded by `.gitignore` so no customer data ever lands on GitHub.
+
+### 2026-04-27 — Phase 3 build (Build the Software Inventory)
+
+- Added `openpyxl` to `requirements.txt` for XLSX import / export.
+- Added Phase 3 constants to `app.py`: `PRODUCT_CATEGORIES` (16 + Other), `DEPLOYMENT_MODELS` (6), `DATA_SENSITIVITY_LEVELS` (4), `PRODUCT_FIELDS` (22 fields with type metadata), `PRODUCT_FIELD_ALIASES` (CSV header fuzzy-match dictionary).
+- Helpers: `_ensure_inventory`, `_new_product`, `_coerce_int / _money / _date`, `_apply_form` (with auto-calc of total_annual_cost), `_csv_header_to_field`, `_import_csv_text`, `_inventory_summary`.
+- New routes: list (`/inventory` with `?q=...&category=...&sort=...&dir=...`), `/inventory/new`, `/inventory/<pid>/edit`, `/inventory/<pid>/delete`, `/inventory/import` (CSV + XLSX), `/inventory/finalize`, `/inventory/export.csv`, `/inventory/export.xlsx`, `/inventory/template.csv` (blank).
+- New templates: `inventory_list.html` (table with per-column sort, search box, category filter, summary tiles, by-category rollup, finalize button), `inventory_form.html` (grouped 22-field form with auto-calc placeholder hint and inline delete), `inventory_import.html` (upload + recognized-headers reference table).
+- Updated `_sidebar.html` to make Phase 3 clickable; updated `engagement_view.html` to surface a Phase 3 panel and offer the XLSX export from there; updated `home.html` to mark Phase 3 as Live.
+- New CSS: `.inventory-table` (sticky header, numeric column alignment), `.sort-link`, `.inventory-scroll`, `.category-rollup`. New `money` Jinja filter.
+- Smoke test (Flask test client): create engagement → add product (auto-calc 12.50×500=6250 verified) → edit (override total) → CSV import (4 rows added, 1 missing-name row skipped) → list, search, category filter, sort all return 200 → CSV export (header row matches PRODUCT_FIELDS) → XLSX export (verified ZIP container is valid) → blank template → delete → finalize (advances to Phase 4 `in_progress`) → reopen → engagement view renders Phase 3 panel. All checks pass. Live server confirmed Phase 3 routes return 200 after the Flask reloader picked up changes. (Caught and fixed one Jinja syntax error: nested-escape backslashes in a JS confirm dialog were rejected by the parser; simplified the confirm message.)

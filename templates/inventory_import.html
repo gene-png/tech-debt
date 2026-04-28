@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Import inventory · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'inventory' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Import inventory</h1>
+      <p class="lead">Upload a CSV or XLSX file. The first row must be column headers. Only the <strong>Product name</strong> column is required; everything else is optional and will be matched by header name (case-insensitive, with common aliases).</p>
+
+      {% if result %}
+        {% if result.error %}
+          <div class="alert">{{ result.error }}</div>
+        {% else %}
+          <div class="notice">
+            Imported <strong>{{ result.added }}</strong> product{{ '' if result.added == 1 else 's' }}.
+            {% if result.skipped %} Skipped <strong>{{ result.skipped }}</strong> row{{ '' if result.skipped == 1 else 's' }} (missing product name).{% endif %}
+            {% if result.mapping %}
+              Detected columns: {% for idx, field in result.mapping.items() %}<span class="tag">{{ field }}</span>{% endfor %}
+            {% endif %}
+          </div>
+          <div class="actions">
+            <a class="btn" href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">View inventory</a>
+            <a class="btn secondary" href="{{ url_for('engagement_inventory_import', engagement_id=eng.id) }}">Import another file</a>
+          </div>
+        {% endif %}
+      {% endif %}
+
+      {% if not result or result.error %}
+        <form method="post" enctype="multipart/form-data">
+          <div class="field">
+            <label>File (CSV or XLSX, max 50 MB)</label>
+            <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required>
+          </div>
+          <div class="actions">
+            <button class="btn" type="submit">Import</button>
+            <a class="btn secondary" href="{{ url_for('engagement_inventory_template_csv', engagement_id=eng.id) }}">Download blank template</a>
+            <a class="btn secondary" href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Cancel</a>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="panel">
+      <h2>Recognized column headers</h2>
+      <p class="helper">Any of the following column names will be auto-mapped. Use the canonical label or any common alias.</p>
+      <table class="checklist-table">
+        <thead><tr><th style="width: 240px;">Field</th><th>Matches headers like</th></tr></thead>
+        <tbody>
+          {% for key, label, _ in fields %}
+            <tr>
+              <td><strong>{{ label }}</strong></td>
+              <td>
+                {% for a in aliases.get(key, []) %}<span class="tag">{{ a }}</span>{% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

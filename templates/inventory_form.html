@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if mode == 'edit' else 'Add' }} product · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'inventory' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>{% if mode == 'edit' %}Edit product{% else %}Add product{% endif %}</h1>
+      <p class="lead">Capture the master inventory fields. Required: product name. Total annual cost will be auto-calculated from cost-per-license × licenses purchased if left blank.</p>
+      {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+
+      <form method="post">
+        <h2>Identity</h2>
+        <div class="row">
+          <div class="col field">
+            <label>Product name *</label>
+            <input type="text" name="product_name" value="{{ product.product_name or '' }}" required autofocus>
+          </div>
+          <div class="col field">
+            <label>Vendor</label>
+            <input type="text" name="vendor" value="{{ product.vendor or '' }}">
+          </div>
+          <div class="col field" style="flex: 0 0 140px;">
+            <label>Version</label>
+            <input type="text" name="version" value="{{ product.version or '' }}">
+          </div>
+        </div>
+        <div class="field">
+          <label>Category</label>
+          <select name="category">
+            <option value="">— select —</option>
+            {% for c in categories %}
+              <option value="{{ c }}" {% if product.category == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <h2>Ownership</h2>
+        <div class="row">
+          <div class="col field">
+            <label>Business owner</label>
+            <input type="text" name="business_owner" value="{{ product.business_owner or '' }}">
+          </div>
+          <div class="col field">
+            <label>Technical owner</label>
+            <input type="text" name="technical_owner" value="{{ product.technical_owner or '' }}">
+          </div>
+          <div class="col field">
+            <label>Contract owner</label>
+            <input type="text" name="contract_owner" value="{{ product.contract_owner or '' }}">
+          </div>
+        </div>
+
+        <h2>Licensing &amp; cost</h2>
+        <div class="row">
+          <div class="col field" style="flex: 0 0 160px;">
+            <label>Licenses purchased</label>
+            <input type="text" name="licenses_purchased" value="{{ product.licenses_purchased }}">
+          </div>
+          <div class="col field" style="flex: 0 0 160px;">
+            <label>Licenses assigned</label>
+            <input type="text" name="licenses_assigned" value="{{ product.licenses_assigned }}">
+          </div>
+          <div class="col field" style="flex: 0 0 160px;">
+            <label>Active users</label>
+            <input type="text" name="active_users" value="{{ product.active_users }}">
+          </div>
+          <div class="col field" style="flex: 0 0 160px;">
+            <label>Cost per license ($)</label>
+            <input type="text" name="cost_per_license" value="{{ product.cost_per_license }}">
+          </div>
+          <div class="col field" style="flex: 0 0 180px;">
+            <label>Total annual cost ($)</label>
+            <input type="text" name="total_annual_cost" value="{{ product.total_annual_cost }}" placeholder="auto from per-license × purchased">
+          </div>
+        </div>
+
+        <h2>Contract</h2>
+        <div class="row">
+          <div class="col field" style="flex: 0 0 200px;">
+            <label>Renewal date</label>
+            <input type="date" name="renewal_date" value="{{ product.renewal_date or '' }}">
+          </div>
+          <div class="col field">
+            <label>Contract term</label>
+            <input type="text" name="contract_term" value="{{ product.contract_term or '' }}" placeholder="e.g. 1yr auto-renew, 3yr fixed">
+          </div>
+          <div class="col field">
+            <label>Purchase source</label>
+            <input type="text" name="purchase_source" value="{{ product.purchase_source or '' }}" placeholder="Corporate card, EA, dept budget, marketplace…">
+          </div>
+        </div>
+
+        <h2>Deployment &amp; use</h2>
+        <div class="row">
+          <div class="col field" style="flex: 0 0 220px;">
+            <label>Deployment model</label>
+            <select name="deployment_model">
+              <option value="">— select —</option>
+              {% for d in deployment_models %}
+                <option value="{{ d }}" {% if product.deployment_model == d %}selected{% endif %}>{{ d }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col field">
+            <label>Primary use case</label>
+            <input type="text" name="primary_use_case" value="{{ product.primary_use_case or '' }}">
+          </div>
+          <div class="col field">
+            <label>Systems supported</label>
+            <input type="text" name="systems_supported" value="{{ product.systems_supported or '' }}" placeholder="e.g. Salesforce, AD, NetSuite">
+          </div>
+        </div>
+
+        <h2>Risk &amp; compliance</h2>
+        <div class="row">
+          <div class="col field" style="flex: 0 0 200px;">
+            <label>Data sensitivity</label>
+            <select name="data_sensitivity">
+              <option value="">— select —</option>
+              {% for s in sensitivity_levels %}
+                <option value="{{ s }}" {% if product.data_sensitivity == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col field">
+            <label>Security or compliance relevance</label>
+            <input type="text" name="security_compliance" value="{{ product.security_compliance or '' }}" placeholder="e.g. PCI scope, SOC 2, HIPAA">
+          </div>
+        </div>
+        <div class="field">
+          <label>Known risks</label>
+          <textarea name="known_risks" rows="3">{{ product.known_risks or '' }}</textarea>
+        </div>
+        <div class="field">
+          <label>Notes</label>
+          <textarea name="notes" rows="3">{{ product.notes or '' }}</textarea>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="submit">{{ 'Save changes' if mode == 'edit' else 'Add product' }}</button>
+          <a class="btn secondary" href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Cancel</a>
+          {% if mode == 'edit' %}
+            <form method="post" action="{{ url_for('engagement_inventory_delete', engagement_id=eng.id, product_id=product.id) }}" class="inline-form" onsubmit="return confirm('Delete this product?');" style="margin-left: auto;">
+              <button class="btn danger" type="submit">Delete product</button>
+            </form>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

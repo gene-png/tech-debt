@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 import uuid
 
@@ -45,6 +47,96 @@ DATA_REQUEST_STATUSES = [
     ("not_applicable", "N/A"),
     ("waived", "Waived"),
 ]
+
+# Phase 3 — Build Inventory ---------------------------------------------------
+
+PRODUCT_CATEGORIES = [
+    "Email and collaboration",
+    "Endpoint security",
+    "Identity and access management",
+    "Project management",
+    "Customer relationship management",
+    "Data analytics",
+    "Cloud services",
+    "Backup and recovery",
+    "Vulnerability management",
+    "Network monitoring",
+    "Ticketing and service desk",
+    "Document management",
+    "Development tools",
+    "AI tools",
+    "Compliance and governance tools",
+    "HR and finance",
+    "Other",
+]
+
+DEPLOYMENT_MODELS = [
+    "SaaS",
+    "Cloud-hosted",
+    "Server / On-premises",
+    "Desktop",
+    "Mobile",
+    "Hybrid",
+]
+
+DATA_SENSITIVITY_LEVELS = [
+    "Public",
+    "Internal",
+    "Confidential",
+    "Restricted",
+]
+
+# (storage_key, csv/form label, type)
+PRODUCT_FIELDS = [
+    ("product_name", "Product name", "text"),
+    ("vendor", "Vendor", "text"),
+    ("version", "Version", "text"),
+    ("category", "Category", "select"),
+    ("business_owner", "Business owner", "text"),
+    ("technical_owner", "Technical owner", "text"),
+    ("contract_owner", "Contract owner", "text"),
+    ("licenses_purchased", "Licenses purchased", "int"),
+    ("licenses_assigned", "Licenses assigned", "int"),
+    ("active_users", "Active users", "int"),
+    ("cost_per_license", "Cost per license", "money"),
+    ("total_annual_cost", "Total annual cost", "money"),
+    ("renewal_date", "Renewal date", "date"),
+    ("contract_term", "Contract term", "text"),
+    ("purchase_source", "Purchase source", "text"),
+    ("deployment_model", "Deployment model", "select_deploy"),
+    ("primary_use_case", "Primary use case", "text"),
+    ("systems_supported", "Systems supported", "text"),
+    ("data_sensitivity", "Data sensitivity", "select_sens"),
+    ("security_compliance", "Security or compliance relevance", "text"),
+    ("known_risks", "Known risks", "textarea"),
+    ("notes", "Notes", "textarea"),
+]
+
+# Aliases for fuzzy CSV header matching (lowercase, normalized).
+PRODUCT_FIELD_ALIASES = {
+    "product_name": ["product", "product_name", "name", "software", "application", "app", "tool"],
+    "vendor": ["vendor", "publisher", "supplier", "manufacturer"],
+    "version": ["version", "release"],
+    "category": ["category", "type", "function"],
+    "business_owner": ["business_owner", "business owner", "business contact"],
+    "technical_owner": ["technical_owner", "technical owner", "it owner", "admin"],
+    "contract_owner": ["contract_owner", "contract owner", "procurement contact"],
+    "licenses_purchased": ["licenses_purchased", "licenses purchased", "purchased licenses", "total licenses", "licenses", "seats"],
+    "licenses_assigned": ["licenses_assigned", "licenses assigned", "assigned licenses", "assigned"],
+    "active_users": ["active_users", "active users", "users", "monthly active users", "mau"],
+    "cost_per_license": ["cost_per_license", "cost per license", "unit cost", "price per license", "price"],
+    "total_annual_cost": ["total_annual_cost", "annual cost", "total cost", "yearly cost", "spend", "annual spend"],
+    "renewal_date": ["renewal_date", "renewal date", "renewal", "next renewal", "expires"],
+    "contract_term": ["contract_term", "contract term", "term"],
+    "purchase_source": ["purchase_source", "purchase source", "source", "purchased via", "purchased through"],
+    "deployment_model": ["deployment_model", "deployment", "deployment type", "hosting"],
+    "primary_use_case": ["primary_use_case", "use case", "purpose", "primary use"],
+    "systems_supported": ["systems_supported", "systems supported", "systems", "integrates with"],
+    "data_sensitivity": ["data_sensitivity", "sensitivity", "data classification", "classification"],
+    "security_compliance": ["security_compliance", "compliance", "security relevance", "compliance relevance"],
+    "known_risks": ["known_risks", "risks", "known issues"],
+    "notes": ["notes", "comments", "remarks"],
+}
 
 TOOL_CATEGORIES = [
     ("cloud", "Cloud services"),
@@ -535,6 +627,490 @@ def engagement_data_request_checklist_txt(engagement_id):
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 — Build the Software Inventory
+# ---------------------------------------------------------------------------
+
+def _ensure_inventory(eng):
+    if "inventory" in eng and "products" in eng["inventory"]:
+        return False
+    eng["inventory"] = {
+        "products": [],
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _new_product():
+    now = datetime.utcnow().isoformat() + "Z"
+    p = {"id": uuid.uuid4().hex[:8], "created_at": now, "updated_at": now}
+    for key, _label, _t in PRODUCT_FIELDS:
+        p[key] = ""
+    return p
+
+
+def _coerce_int(v):
+    if v is None or v == "":
+        return ""
+    s = str(v).replace(",", "").strip()
+    if not s:
+        return ""
+    try:
+        return int(float(s))
+    except ValueError:
+        return ""
+
+
+def _coerce_money(v):
+    if v is None or v == "":
+        return ""
+    s = str(v).replace("$", "").replace(",", "").strip()
+    if not s:
+        return ""
+    try:
+        return round(float(s), 2)
+    except ValueError:
+        return ""
+
+
+def _coerce_date(v):
+    """Best-effort normalize to YYYY-MM-DD; return raw if unparseable."""
+    if not v:
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d", "%m-%d-%Y", "%d-%b-%Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return s  # keep as-is if unrecognized
+
+
+def _apply_form(product, form):
+    """Update a product dict from a Flask form."""
+    for key, _label, ftype in PRODUCT_FIELDS:
+        raw = form.get(key, "").strip() if hasattr(form, "get") else (form.get(key) or "")
+        if isinstance(raw, str):
+            raw = raw.strip()
+        if ftype == "int":
+            product[key] = _coerce_int(raw)
+        elif ftype == "money":
+            product[key] = _coerce_money(raw)
+        elif ftype == "date":
+            product[key] = _coerce_date(raw)
+        else:
+            product[key] = raw
+    # auto-fill total_annual_cost if blank but per-license + purchased present
+    if product.get("total_annual_cost") in ("", None):
+        try:
+            cpl = float(product.get("cost_per_license") or 0)
+            qty = float(product.get("licenses_purchased") or 0)
+            if cpl and qty:
+                product["total_annual_cost"] = round(cpl * qty, 2)
+        except (TypeError, ValueError):
+            pass
+    product["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    return product
+
+
+def _normalize_header(h):
+    return (h or "").strip().lower().replace("-", "_").replace("  ", " ")
+
+
+def _csv_header_to_field(h):
+    norm = _normalize_header(h)
+    for field_key, aliases in PRODUCT_FIELD_ALIASES.items():
+        if norm in [_normalize_header(a) for a in aliases]:
+            return field_key
+    return None
+
+
+def _import_csv_text(eng, text):
+    """Parse CSV text and append rows as new products. Returns (added, skipped, mapping)."""
+    reader = csv.reader(io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return 0, 0, {}
+    headers = rows[0]
+    mapping = {}
+    for idx, h in enumerate(headers):
+        field = _csv_header_to_field(h)
+        if field:
+            mapping[idx] = field
+    if not any(v == "product_name" for v in mapping.values()):
+        return 0, len(rows) - 1, {}
+    added = 0
+    skipped = 0
+    for row in rows[1:]:
+        if not row:
+            continue
+        product = _new_product()
+        for idx, value in enumerate(row):
+            field = mapping.get(idx)
+            if not field:
+                continue
+            value = (value or "").strip()
+            if field in ("licenses_purchased", "licenses_assigned", "active_users"):
+                product[field] = _coerce_int(value)
+            elif field in ("cost_per_license", "total_annual_cost"):
+                product[field] = _coerce_money(value)
+            elif field == "renewal_date":
+                product[field] = _coerce_date(value)
+            else:
+                product[field] = value
+        if not product.get("product_name"):
+            skipped += 1
+            continue
+        # auto-fill total_annual_cost
+        if not product.get("total_annual_cost"):
+            try:
+                cpl = float(product.get("cost_per_license") or 0)
+                qty = float(product.get("licenses_purchased") or 0)
+                if cpl and qty:
+                    product["total_annual_cost"] = round(cpl * qty, 2)
+            except (TypeError, ValueError):
+                pass
+        eng["inventory"]["products"].append(product)
+        added += 1
+    return added, skipped, mapping
+
+
+def _inventory_summary(inv):
+    products = inv.get("products", [])
+    total = len(products)
+    annual = 0.0
+    licenses = 0
+    assigned = 0
+    by_category = {}
+    for p in products:
+        try:
+            annual += float(p.get("total_annual_cost") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            licenses += int(p.get("licenses_purchased") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            assigned += int(p.get("licenses_assigned") or 0)
+        except (TypeError, ValueError):
+            pass
+        cat = (p.get("category") or "Uncategorized").strip() or "Uncategorized"
+        by_category[cat] = by_category.get(cat, 0) + 1
+    return {
+        "count": total,
+        "annual_cost": annual,
+        "licenses_purchased": licenses,
+        "licenses_assigned": assigned,
+        "by_category": sorted(by_category.items(), key=lambda kv: (-kv[1], kv[0])),
+    }
+
+
+@app.route("/engagements/<engagement_id>/inventory")
+def engagement_inventory(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_inventory(eng):
+        storage.save_engagement(eng)
+
+    products = list(eng["inventory"]["products"])
+    q = request.args.get("q", "").strip().lower()
+    cat = request.args.get("category", "").strip()
+    sort_key = request.args.get("sort", "product_name")
+    sort_dir = request.args.get("dir", "asc")
+
+    if q:
+        def matches(p):
+            blob = " ".join(str(v) for v in p.values()).lower()
+            return q in blob
+        products = [p for p in products if matches(p)]
+    if cat:
+        products = [p for p in products if (p.get("category") or "") == cat]
+
+    def sort_value(p):
+        v = p.get(sort_key, "")
+        if sort_key in ("licenses_purchased", "licenses_assigned", "active_users"):
+            try:
+                return int(v) if v != "" else -1
+            except (TypeError, ValueError):
+                return -1
+        if sort_key in ("cost_per_license", "total_annual_cost"):
+            try:
+                return float(v) if v != "" else -1.0
+            except (TypeError, ValueError):
+                return -1.0
+        return (str(v) or "").lower()
+
+    products.sort(key=sort_value, reverse=(sort_dir == "desc"))
+
+    summary = _inventory_summary(eng["inventory"])
+    return render_template(
+        "inventory_list.html",
+        eng=eng,
+        products=products,
+        summary=summary,
+        categories=PRODUCT_CATEGORIES,
+        sort_key=sort_key,
+        sort_dir=sort_dir,
+        q=q,
+        category_filter=cat,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/new", methods=["GET", "POST"])
+def engagement_inventory_new(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    if request.method == "POST":
+        product = _new_product()
+        _apply_form(product, request.form)
+        if not product.get("product_name"):
+            return render_template(
+                "inventory_form.html",
+                eng=eng, product=product, error="Product name is required.",
+                categories=PRODUCT_CATEGORIES,
+                deployment_models=DEPLOYMENT_MODELS,
+                sensitivity_levels=DATA_SENSITIVITY_LEVELS,
+                fields=PRODUCT_FIELDS,
+                mode="new",
+                phases=PHASES,
+            )
+        eng["inventory"]["products"].append(product)
+        if eng["phase_progress"].get("inventory") == "not_started":
+            eng["phase_progress"]["inventory"] = "in_progress"
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_inventory", engagement_id=engagement_id))
+
+    return render_template(
+        "inventory_form.html",
+        eng=eng, product=_new_product(), error=None,
+        categories=PRODUCT_CATEGORIES,
+        deployment_models=DEPLOYMENT_MODELS,
+        sensitivity_levels=DATA_SENSITIVITY_LEVELS,
+        fields=PRODUCT_FIELDS,
+        mode="new",
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/<product_id>/edit", methods=["GET", "POST"])
+def engagement_inventory_edit(engagement_id, product_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    product = next((p for p in eng["inventory"]["products"] if p["id"] == product_id), None)
+    if not product:
+        abort(404)
+    if request.method == "POST":
+        _apply_form(product, request.form)
+        if not product.get("product_name"):
+            return render_template(
+                "inventory_form.html",
+                eng=eng, product=product, error="Product name is required.",
+                categories=PRODUCT_CATEGORIES,
+                deployment_models=DEPLOYMENT_MODELS,
+                sensitivity_levels=DATA_SENSITIVITY_LEVELS,
+                fields=PRODUCT_FIELDS,
+                mode="edit",
+                phases=PHASES,
+            )
+        storage.save_engagement(eng)
+        return redirect(url_for("engagement_inventory", engagement_id=engagement_id))
+    return render_template(
+        "inventory_form.html",
+        eng=eng, product=product, error=None,
+        categories=PRODUCT_CATEGORIES,
+        deployment_models=DEPLOYMENT_MODELS,
+        sensitivity_levels=DATA_SENSITIVITY_LEVELS,
+        fields=PRODUCT_FIELDS,
+        mode="edit",
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/<product_id>/delete", methods=["POST"])
+def engagement_inventory_delete(engagement_id, product_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    eng["inventory"]["products"] = [p for p in eng["inventory"]["products"] if p["id"] != product_id]
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_inventory", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/inventory/import", methods=["GET", "POST"])
+def engagement_inventory_import(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    result = None
+    if request.method == "POST":
+        f = request.files.get("file")
+        if not f or not f.filename:
+            result = {"error": "Choose a CSV or XLSX file to upload."}
+        else:
+            ext = os.path.splitext(f.filename)[1].lower()
+            try:
+                if ext == ".csv":
+                    text = f.read().decode("utf-8-sig", errors="replace")
+                    added, skipped, mapping = _import_csv_text(eng, text)
+                elif ext in (".xlsx", ".xlsm"):
+                    from openpyxl import load_workbook
+                    wb = load_workbook(filename=io.BytesIO(f.read()), data_only=True)
+                    ws = wb.active
+                    rows = []
+                    for row in ws.iter_rows(values_only=True):
+                        rows.append(["" if c is None else str(c) for c in row])
+                    sio = io.StringIO()
+                    writer = csv.writer(sio)
+                    writer.writerows(rows)
+                    text = sio.getvalue()
+                    added, skipped, mapping = _import_csv_text(eng, text)
+                else:
+                    result = {"error": f"Unsupported file type: {ext}. Use CSV or XLSX."}
+                    added = skipped = 0
+                    mapping = {}
+            except Exception as ex:  # noqa: BLE001
+                result = {"error": f"Import failed: {ex}"}
+                added = skipped = 0
+                mapping = {}
+            if "error" not in (result or {}):
+                if added > 0 and eng["phase_progress"].get("inventory") == "not_started":
+                    eng["phase_progress"]["inventory"] = "in_progress"
+                storage.save_engagement(eng)
+                result = {"added": added, "skipped": skipped, "mapping": mapping}
+    return render_template(
+        "inventory_import.html",
+        eng=eng, result=result,
+        fields=PRODUCT_FIELDS,
+        aliases=PRODUCT_FIELD_ALIASES,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/finalize", methods=["POST"])
+def engagement_inventory_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["inventory"]["finalized"] = False
+        eng["inventory"]["finalized_at"] = None
+        eng["phase_progress"]["inventory"] = "in_progress"
+        eng["status"] = "inventory"
+    else:
+        eng["inventory"]["finalized"] = True
+        eng["inventory"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["inventory"] = "complete"
+        eng["status"] = "normalize"
+        if eng["phase_progress"].get("normalize") == "not_started":
+            eng["phase_progress"]["normalize"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_inventory", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/inventory/export.csv")
+def engagement_inventory_export_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([label for _key, label, _t in PRODUCT_FIELDS])
+    for p in eng["inventory"]["products"]:
+        writer.writerow([p.get(key, "") for key, _label, _t in PRODUCT_FIELDS])
+    fn = f"software-inventory-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/export.xlsx")
+def engagement_inventory_export_xlsx(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_inventory(eng)
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Software Inventory"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2B5FD9")
+    headers = [label for _key, label, _t in PRODUCT_FIELDS]
+    ws.append(headers)
+    for col_idx, _ in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 22
+
+    for p in eng["inventory"]["products"]:
+        row = []
+        for key, _label, ftype in PRODUCT_FIELDS:
+            v = p.get(key, "")
+            if ftype in ("int",) and v != "":
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    pass
+            elif ftype == "money" and v != "":
+                try:
+                    v = float(v)
+                except (TypeError, ValueError):
+                    pass
+            row.append(v)
+        ws.append(row)
+
+    widths = [22, 18, 10, 24, 18, 18, 18, 14, 14, 12, 14, 16, 14, 16, 18, 22, 24, 24, 16, 26, 28, 28]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+
+    ws.freeze_panes = "A2"
+
+    bio = io.BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    fn = f"software-inventory-{eng.get('id')}.xlsx"
+    return Response(
+        bio.read(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@app.route("/engagements/<engagement_id>/inventory/template.csv")
+def engagement_inventory_template_csv(engagement_id):
+    """Empty CSV with the canonical headers — useful for customers preparing data."""
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([label for _key, label, _t in PRODUCT_FIELDS])
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="software-inventory-template.csv"'},
+    )
+
+
 @app.template_filter("format_bytes")
 def format_bytes(n):
     if n is None:
@@ -545,6 +1121,16 @@ def format_bytes(n):
             return f"{int(n)} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
+
+
+@app.template_filter("money")
+def format_money(v):
+    if v in (None, ""):
+        return ""
+    try:
+        return f"${float(v):,.0f}"
+    except (TypeError, ValueError):
+        return str(v)
 
 
 @app.template_filter("phase_label")
