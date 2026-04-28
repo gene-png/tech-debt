@@ -1,58 +1,163 @@
 {% extends "base.html" %}
-{% block title %}Engagements · Software Rationalization{% endblock %}
+{% block title %}Dashboard · Software Rationalization Workbench{% endblock %}
 {% block body %}
-<div class="layout">
-  <div class="main" style="max-width: 980px; margin: 0 auto;">
-    <div class="panel">
-      <h1>Engagements</h1>
-      <p class="lead">Each engagement walks a customer through the 11-phase Software Inventory, License Review, and Technical Debt Reduction playbook. Phase 1 (Define the Scope) is live.</p>
-      {% if engagements %}
-        <ul class="engagement-list">
-          {% for e in engagements %}
-            <li>
-              <div>
-                <div class="name"><a href="{{ url_for('engagement_view', engagement_id=e.id) }}">{{ e.name }}</a></div>
-                <div class="meta">{{ e.client }}{% if e.lead %} · Lead: {{ e.lead }}{% endif %} · created {{ e.created_at[:10] }}</div>
-              </div>
-              <div>
-                {% set scope_status = e.phase_progress.get('scope', 'not_started') %}
-                {% if scope_status == 'complete' %}
-                  <span class="tag" style="background: #e3f1e6; color: var(--good);">Scope finalized</span>
-                {% elif scope_status == 'in_progress' %}
-                  <span class="tag" style="background: #eff3fc; color: var(--accent-dark);">Scope in progress</span>
-                {% else %}
-                  <span class="tag">Not started</span>
-                {% endif %}
-              </div>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="empty">
-          <p>No engagements yet.</p>
-          <a class="btn" href="{{ url_for('engagement_new') }}">Create your first engagement</a>
+<div class="dashboard">
+  {# ---------- Hero ---------- #}
+  <section class="hero">
+    <div class="hero-text">
+      <h1>Software Rationalization Workbench</h1>
+      <p class="hero-sub">
+        Walk every customer engagement through the 11-phase playbook —
+        from scope statement to executive briefing — with structured outputs,
+        AI-assisted analysis, and a clear paper trail at every step.
+      </p>
+    </div>
+    <div class="hero-cta">
+      <a class="btn btn-primary-lg" href="{{ url_for('engagement_new') }}">+ New engagement</a>
+    </div>
+  </section>
+
+  {# ---------- Portfolio overview ---------- #}
+  {% if portfolio.engagement_count %}
+    <section class="portfolio">
+      <h2 class="section-title">Portfolio overview</h2>
+      <div class="portfolio-grid">
+        <div class="metric-card">
+          <div class="metric-num">{{ portfolio.engagement_count }}</div>
+          <div class="metric-lbl">Engagements</div>
+          <div class="metric-sub">
+            {{ portfolio.active_count }} active ·
+            {{ portfolio.complete_count }} complete{% if portfolio.not_started_count %} ·
+            {{ portfolio.not_started_count }} not started{% endif %}
+          </div>
         </div>
+        <div class="metric-card">
+          <div class="metric-num">{{ portfolio.products_total }}</div>
+          <div class="metric-lbl">Products reviewed</div>
+          <div class="metric-sub">across all customer estates</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num">{{ portfolio.total_spend | money }}</div>
+          <div class="metric-lbl">Annual spend reviewed</div>
+          <div class="metric-sub">total customer software cost</div>
+        </div>
+        <div class="metric-card metric-good">
+          <div class="metric-num">{{ portfolio.total_recurring_savings | money }}</div>
+          <div class="metric-lbl">Savings identified</div>
+          <div class="metric-sub">{{ portfolio.total_approved_savings | money }} approved (conservative)</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-num">{{ portfolio.accepted_recommendations }}</div>
+          <div class="metric-lbl">Accepted recommendations</div>
+          <div class="metric-sub">awaiting execution</div>
+        </div>
+      </div>
+    </section>
+  {% endif %}
+
+  {# ---------- Engagements ---------- #}
+  <section class="engagements">
+    <div class="section-head">
+      <h2 class="section-title">Engagements</h2>
+      {% if engagements %}
+        <a class="btn secondary" href="{{ url_for('engagement_new') }}">+ New engagement</a>
       {% endif %}
     </div>
 
-    <div class="panel">
-      <h2>Playbook phases</h2>
-      <p class="helper">The end-to-end 11-phase flow — all phases are live.</p>
-      <ul class="phase-list">
-        {% for key, label in phases %}
-          {% set is_live = true %}
-          <li>
-            <span class="phase-dot {{ 'status-progress' if is_live else 'status-pending' }}"></span>
-            <span>{{ label }}</span>
-            {% if is_live %}
-              <span class="tag cat" style="margin-left: auto;">Live</span>
-            {% else %}
-              <span class="tag" style="margin-left: auto;">Planned</span>
-            {% endif %}
-          </li>
+    {% if not engagements %}
+      <div class="empty-hero">
+        <div class="empty-icon">📋</div>
+        <h3>Start your first engagement</h3>
+        <p>Each engagement is a customer-specific run through all 11 phases of the playbook. The workbench keeps everything organized — no spreadsheets, no lost notes — and produces a ready-to-share executive briefing at the end.</p>
+        <a class="btn btn-primary-lg" href="{{ url_for('engagement_new') }}">+ Create your first engagement</a>
+      </div>
+    {% else %}
+      <div class="eng-grid">
+        {% for e in engagements %}
+          {% set s = e.summary %}
+          <article class="eng-card eng-status-{{ s.status }}">
+            <header class="eng-card-header">
+              <div class="eng-card-title">
+                <h3><a href="{{ url_for('engagement_view', engagement_id=e.id) }}">{{ e.name }}</a></h3>
+                <div class="meta">
+                  {{ e.client }}{% if e.lead %} · Lead: {{ e.lead }}{% endif %} · created {{ e.created_at[:10] }}
+                </div>
+              </div>
+              <div class="eng-card-status">
+                {% if s.status == 'complete' %}
+                  <span class="status-pill status-received">Complete</span>
+                {% elif s.status == 'active' %}
+                  <span class="status-pill status-requested">Phase {{ s.current_phase_idx }} of {{ s.total_phases }}</span>
+                {% else %}
+                  <span class="status-pill status-not_applicable">Not started</span>
+                {% endif %}
+              </div>
+            </header>
+
+            <div class="eng-progress">
+              <div class="eng-progress-strip">
+                {% for key, label in phases %}
+                  {% set st = e.phase_progress.get(key, 'not_started') %}
+                  <span class="eng-phase-dot {{ st | phase_status_class }}"
+                        title="Phase {{ loop.index }}: {{ label }} — {{ st | replace('_', ' ') }}"></span>
+                {% endfor %}
+              </div>
+              <div class="eng-progress-meta">
+                {{ s.completed_count }} of {{ s.total_phases }} phases complete · {{ s.completion_pct }}%
+              </div>
+            </div>
+
+            <div class="eng-stats">
+              <div class="eng-stat">
+                <div class="eng-stat-num">{{ s.products_count }}</div>
+                <div class="eng-stat-lbl">Products</div>
+              </div>
+              <div class="eng-stat">
+                <div class="eng-stat-num">{{ s.annual_spend | money }}</div>
+                <div class="eng-stat-lbl">Annual spend</div>
+              </div>
+              <div class="eng-stat eng-stat-good">
+                <div class="eng-stat-num">{{ s.recurring_savings | money }}</div>
+                <div class="eng-stat-lbl">Savings ID'd</div>
+              </div>
+            </div>
+
+            <footer class="eng-card-footer">
+              {% if s.status == 'complete' %}
+                <a class="btn" href="{{ url_for('engagement_exec_summary_briefing', engagement_id=e.id) }}">View executive briefing →</a>
+                <a class="btn secondary" href="{{ url_for('engagement_view', engagement_id=e.id) }}">Overview</a>
+              {% elif s.next_phase_key %}
+                {% set route = phase_routes.get(s.next_phase_key) %}
+                <a class="btn" href="{{ url_for(route, engagement_id=e.id) }}">Continue: {{ s.next_phase_label }} →</a>
+                <a class="btn secondary" href="{{ url_for('engagement_view', engagement_id=e.id) }}">Overview</a>
+              {% else %}
+                <a class="btn" href="{{ url_for('engagement_view', engagement_id=e.id) }}">Open engagement →</a>
+              {% endif %}
+            </footer>
+          </article>
         {% endfor %}
-      </ul>
+      </div>
+    {% endif %}
+  </section>
+
+  {# ---------- Playbook stages ---------- #}
+  <section class="stages">
+    <h2 class="section-title">The 11-phase playbook</h2>
+    <p class="section-sub">Three stages, eleven phases, one structured workflow per engagement.</p>
+    <div class="stage-grid">
+      {% for stage in stages %}
+        <div class="stage-card">
+          <div class="stage-eyebrow">Stage {{ loop.index }}</div>
+          <div class="stage-title">{{ stage.name }}</div>
+          <div class="stage-sub">{{ stage.subtitle }}</div>
+          <ol class="stage-phases">
+            {% for key in stage.phases %}
+              <li>{{ phase_label_map[key] }}</li>
+            {% endfor %}
+          </ol>
+        </div>
+      {% endfor %}
     </div>
-  </div>
+  </section>
 </div>
 {% endblock %}

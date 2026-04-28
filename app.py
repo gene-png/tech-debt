@@ -347,10 +347,175 @@ def _owners_to_text(owners):
     return "\n".join(lines)
 
 
+# Map each phase key to its primary route name. Used by the home page so
+# the "Continue: <next phase>" button on each engagement card jumps the
+# consultant directly to the right place instead of the engagement overview.
+PHASE_ROUTES = {
+    "scope": "engagement_scope",
+    "data_request": "engagement_data_request",
+    "inventory": "engagement_inventory",
+    "normalize": "engagement_normalize",
+    "overlap": "engagement_overlap",
+    "ai_review": "engagement_ai_review",
+    "tech_debt": "engagement_tech_debt",
+    "savings": "engagement_savings",
+    "validation": "engagement_validation",
+    "recommendations": "engagement_recommendations",
+    "exec_summary": "engagement_exec_summary",
+}
+
+
+def _engagement_card_summary(eng):
+    """Compact rollup used to render an engagement card on the home page."""
+    products = eng.get("inventory", {}).get("products", [])
+    total_spend = sum(_safe_float(p.get("total_annual_cost")) for p in products)
+
+    if eng.get("savings", {}).get("opportunities"):
+        sv = _savings_summary(eng)
+        recurring = sv.get("total_recurring", 0.0)
+        approved = sv.get("approved_recurring", 0.0)
+    else:
+        recurring = 0.0
+        approved = 0.0
+
+    progress = eng.get("phase_progress", {})
+    completed_count = sum(1 for k, _l in PHASES if progress.get(k) == "complete")
+
+    # Current phase = highest-numbered phase that is in_progress or complete
+    current_idx = 0
+    for i, (key, _label) in enumerate(PHASES, 1):
+        if progress.get(key) in ("in_progress", "complete"):
+            current_idx = i
+
+    # Next action: prefer the LATEST in_progress phase (the consultant is
+    # actively working there). If nothing is in_progress, fall back to the
+    # first not-yet-complete phase. Without this, an engagement with Phase 1
+    # in draft and Phase 10 in progress would tell the user to "continue
+    # Phase 1" — wrong; they're on Phase 10.
+    next_key = None
+    next_label = None
+    next_idx = 0
+    latest_in_progress = None
+    for i, (key, label) in enumerate(PHASES, 1):
+        if progress.get(key) == "in_progress":
+            latest_in_progress = (i, key, label)
+    if latest_in_progress:
+        next_idx, next_key, next_label = latest_in_progress
+    else:
+        for i, (key, label) in enumerate(PHASES, 1):
+            if progress.get(key) != "complete":
+                next_idx, next_key, next_label = i, key, label
+                break
+
+    if all(progress.get(k) == "complete" for k, _l in PHASES):
+        status = "complete"
+    elif current_idx == 0:
+        status = "not_started"
+    else:
+        status = "active"
+
+    return {
+        "products_count": len(products),
+        "annual_spend": total_spend,
+        "recurring_savings": recurring,
+        "approved_savings": approved,
+        "current_phase_idx": current_idx,
+        "next_phase_key": next_key,
+        "next_phase_label": next_label,
+        "next_phase_idx": next_idx,
+        "status": status,
+        "completed_count": completed_count,
+        "total_phases": len(PHASES),
+        "completion_pct": int(100 * completed_count / len(PHASES)) if PHASES else 0,
+    }
+
+
+def _portfolio_summary(engagements):
+    """Aggregate metrics across all engagements for the portfolio hero strip."""
+    counts = {"active": 0, "complete": 0, "not_started": 0}
+    total_spend = 0.0
+    total_recurring = 0.0
+    total_approved = 0.0
+    products_total = 0
+    accepted_recs_total = 0
+
+    for eng in engagements:
+        progress = eng.get("phase_progress", {})
+        all_complete = all(progress.get(k) == "complete" for k, _l in PHASES)
+        any_started = any(progress.get(k) in ("in_progress", "complete") for k, _l in PHASES)
+        if all_complete:
+            counts["complete"] += 1
+        elif any_started:
+            counts["active"] += 1
+        else:
+            counts["not_started"] += 1
+
+        products = eng.get("inventory", {}).get("products", [])
+        products_total += len(products)
+        for p in products:
+            total_spend += _safe_float(p.get("total_annual_cost"))
+
+        if eng.get("savings", {}).get("opportunities"):
+            sv = _savings_summary(eng)
+            total_recurring += sv.get("total_recurring", 0.0)
+            total_approved += sv.get("approved_recurring", 0.0)
+
+        accepted_recs_total += sum(
+            1 for r in eng.get("recommendations", {}).get("recs", {}).values()
+            if r.get("status") == "accepted"
+        )
+
+    return {
+        "engagement_count": len(engagements),
+        "active_count": counts["active"],
+        "complete_count": counts["complete"],
+        "not_started_count": counts["not_started"],
+        "total_spend": total_spend,
+        "total_recurring_savings": total_recurring,
+        "total_approved_savings": total_approved,
+        "products_total": products_total,
+        "accepted_recommendations": accepted_recs_total,
+    }
+
+
+# 3-stage grouping shown on the home page so the playbook scope is visible
+# at a glance without enumerating all 11 phases.
+PLAYBOOK_STAGES = [
+    {
+        "name": "Discover",
+        "subtitle": "Define scope, gather data, build the inventory",
+        "phases": ["scope", "data_request", "inventory"],
+    },
+    {
+        "name": "Analyze",
+        "subtitle": "Normalize, find overlap, AI review, surface debt",
+        "phases": ["normalize", "overlap", "ai_review", "tech_debt"],
+    },
+    {
+        "name": "Decide",
+        "subtitle": "Quantify savings, validate, recommend, brief leadership",
+        "phases": ["savings", "validation", "recommendations", "exec_summary"],
+    },
+]
+
+
 @app.route("/")
 def home():
-    engagements = storage.list_engagements()
-    return render_template("home.html", engagements=engagements, phases=PHASES)
+    raw_engagements = storage.list_engagements()
+    engagements = []
+    for eng in raw_engagements:
+        engagements.append({**eng, "summary": _engagement_card_summary(eng)})
+    portfolio = _portfolio_summary(raw_engagements)
+    phase_label_map = {k: l for k, l in PHASES}
+    return render_template(
+        "home.html",
+        engagements=engagements,
+        portfolio=portfolio,
+        phases=PHASES,
+        phase_routes=PHASE_ROUTES,
+        phase_label_map=phase_label_map,
+        stages=PLAYBOOK_STAGES,
+    )
 
 
 @app.route("/engagements/new", methods=["GET", "POST"])
