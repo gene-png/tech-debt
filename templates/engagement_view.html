@@ -192,11 +192,32 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 9 — Validate with Stakeholders</h2>
+      {% set vd = eng.get('validation') %}
+      {% if vd and vd.finalized %}
+        <div class="notice">Phase 9 finalized on {{ vd.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.validation == 'in_progress' %}
+        <div class="notice warn">Stakeholder validation in progress.</div>
+      {% else %}
+        <div class="notice warn">Stakeholder validation has not been started.</div>
+      {% endif %}
+      <p class="helper">Per-opportunity validation pane: stakeholder roster (8 role types), 7 validation questions from the playbook, overall validation status. Anchored to Phase 8 opportunities.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_validation', engagement_id=eng.id) }}">
+          {% if vd and vd.finalized %}Review validation notes{% else %}Open validation workspace{% endif %}
+        </a>
+        {% if vd and vd.validations %}
+          <a class="btn secondary" href="{{ url_for('engagement_validation_notes', engagement_id=eng.id) }}">View notes</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 9 through 11 of the playbook will activate in upcoming releases — Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 10 through 11 of the playbook will activate in upcoming releases — Recommendations and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings', 'validation') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

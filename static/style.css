@@ -845,3 +845,35 @@ input:focus, textarea:focus, select:focus {
   padding-top: 10px;
   border-top: 1px dotted var(--border);
 }
+
+/* ---------- Phase 9: validation ---------- */
+
+.val-card { border-left: 3px solid var(--border-strong); }
+.val-card.val-validated   { border-left-color: var(--good); }
+.val-card.val-blocked     { border-left-color: var(--danger); }
+.val-card.val-pending     { border-left-color: var(--accent); }
+.val-card.val-not_started { border-left-color: var(--border-strong); }
+
+.val-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.val-questions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 12px 18px;
+  margin-top: 10px;
+}
+.val-question label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+}
+.val-question textarea {
+  font-family: inherit;
+  font-size: 13px;
+}

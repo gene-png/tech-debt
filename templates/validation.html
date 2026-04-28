@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Stakeholder validation · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'validation' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 9 — Validate with Stakeholders</h1>
+      <p class="lead">Don't recommend removing tools based on a spreadsheet alone. For each savings opportunity, capture stakeholder consultations and answers to the playbook's seven validation questions.</p>
+
+      {% set v = eng.validation %}
+      {% if v.finalized %}
+        <div class="notice">Phase 9 finalized on {{ v.finalized_at[:10] }}.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.opportunity_count }}</div><div class="lbl">Opportunities</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.by_status.validated }}</div><div class="lbl">Validated</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.by_status.pending }}</div><div class="lbl">In progress</div></div>
+        <div class="summary-tile danger"><div class="num">{{ summary.by_status.blocked }}</div><div class="lbl">Blocked</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.by_status.not_started }}</div><div class="lbl">Not started</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.stakeholders_recorded }}</div><div class="lbl">Stakeholders recorded</div></div>
+      </div>
+
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('engagement_validation_notes', engagement_id=eng.id) }}">View validation notes</a>
+        <a class="btn secondary" href="{{ url_for('engagement_validation_notes_csv', engagement_id=eng.id) }}">Download .csv</a>
+      </div>
+
+      <p class="helper" style="margin-top: 12px;">
+        <strong>Stakeholder format</strong> (one per line): <code>Name | Role | YYYY-MM-DD | Status | notes</code>. Recognized roles: {% for k, l in roles %}<span class="tag">{{ l }}</span>{% endfor %}. Recognized statuses: {% for k, l in statuses %}<span class="tag">{{ l }}</span>{% endfor %}. Unrecognized values are kept as free text.
+      </p>
+    </div>
+
+    {% if not opportunities %}
+      <div class="panel">
+        <div class="empty">
+          No savings opportunities to validate yet. <a href="{{ url_for('engagement_savings', engagement_id=eng.id) }}">Build opportunities in Phase 8</a> first.
+        </div>
+      </div>
+    {% endif %}
+
+    {% for o in opportunities %}
+      <div class="panel val-card val-{{ o.validation.overall_status }}" id="opp-{{ o.id }}">
+        <div class="val-card-header">
+          <div style="flex: 1; min-width: 320px;">
+            <h2 class="inline" style="margin: 0; padding: 0; border: none; font-size: 16px;">{{ o.title }}</h2>
+            <div class="meta" style="margin-top: 4px;">
+              {% set disp_label = ({'retire': 'Retire', 'replace': 'Replace', 'consolidate': 'Consolidate', 'renegotiate': 'Renegotiate', 'reduce_licenses': 'Reduce licenses', 'other': 'Other'}).get(o.disposition, o.disposition) %}
+              {{ disp_label }} ·
+              {{ o.totals.recurring | money }}/yr recurring{% if o.totals.first_year != o.totals.recurring %} · {{ o.totals.first_year | money }} first-year net{% endif %}
+              {% if o.products %} ·
+                {% for p in o.products %}<span class="tag cat">{{ p.product_name }}</span>{% endfor %}
+              {% endif %}
+            </div>
+          </div>
+          <div style="flex: 0 0 auto; text-align: right;">
+            {% set st = o.validation.overall_status %}
+            <span class="status-pill status-{% if st == 'validated' %}received{% elif st == 'pending' %}requested{% elif st == 'blocked' %}waived{% else %}not_applicable{% endif %}">
+              {% set st_label = ({'not_started': 'Not started', 'pending': 'In progress', 'validated': 'Validated', 'blocked': 'Blocked'}).get(st, st) %}
+              {{ st_label | upper }}
+            </span>
+          </div>
+        </div>
+
+        <form method="post" action="{{ url_for('engagement_validation_save', engagement_id=eng.id, opp_id=o.id) }}">
+          <h3 class="section-label">Stakeholders consulted</h3>
+          <textarea name="stakeholders" rows="5" placeholder="Jane Doe | IT leadership | 2026-04-30 | Agreed | wants migration plan&#10;Bob Smith | Cybersecurity | 2026-05-02 | Pushback | concerns about replacement SSO posture">{{ o.stakeholders_text }}</textarea>
+
+          <h3 class="section-label">Validation questions</h3>
+          <div class="val-questions">
+            {% for key, label in questions %}
+              <div class="val-question">
+                <label>{{ loop.index }}. {{ label }}</label>
+                <textarea name="answer_{{ key }}" rows="2">{{ o.validation.answers.get(key, '') }}</textarea>
+              </div>
+            {% endfor %}
+          </div>
+
+          <div class="row" style="margin-top: 14px;">
+            <div class="col" style="flex: 0 0 220px;">
+              <label>Overall validation status</label>
+              <select name="overall_status">
+                {% for k, l in overall_statuses %}
+                  <option value="{{ k }}" {% if o.validation.overall_status == k %}selected{% endif %}>{{ l }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col">
+              <label>Additional notes</label>
+              <input type="text" name="notes" value="{{ o.validation.notes or '' }}" placeholder="cross-cutting context, follow-ups, decisions outstanding…">
+            </div>
+            <div class="col" style="flex: 0 0 110px; align-self: end;">
+              <button class="btn" type="submit">Save</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    {% endfor %}
+
+    <div class="panel">
+      <h2>Finalize Phase 9</h2>
+      <p class="helper">Lock the stakeholder validation notes once every opportunity has been validated (or explicitly marked blocked). Phase 10 (Recommendations) activates next.</p>
+      <form method="post" action="{{ url_for('engagement_validation_finalize', engagement_id=eng.id) }}">
+        {% if v.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 9</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 9</button>
+          {% if summary.by_status.not_started > 0 %}
+            <span class="helper" style="margin-left: 10px;">{{ summary.by_status.not_started }} opportunit{{ 'y' if summary.by_status.not_started == 1 else 'ies' }} still not started.</span>
+          {% endif %}
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

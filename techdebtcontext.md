@@ -32,6 +32,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `8a56e8b` (2026-04-28) — Phase 7: Identify Technical Debt (8 files changed, +764 lines).
 - `df10622` (2026-04-28) — Backfill 8a56e8b commit hash in change log.
 - `6e29025` (2026-04-28) — Phase 8: Estimate Cost Savings (8 files changed, +930 lines).
+- `2553709` (2026-04-28) — Backfill 6e29025 commit hash in change log.
+- *(2026-04-28) Phase 9 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -47,7 +49,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 6 | AI Assisted Comparison         | **Live** |
 | 7 | Identify Technical Debt        | **Live** |
 | 8 | Estimate Cost Savings          | **Live** |
-| 9 | Validate with Stakeholders     | Planned  |
+| 9 | Validate with Stakeholders     | **Live** |
 | 10 | Create Recommendations        | Planned  |
 | 11 | Create the Executive Summary  | Planned  |
 
@@ -176,7 +178,29 @@ savings: {                              ← Phase 8
   },
   finalized, finalized_at,
 }
+
+validation: {                           ← Phase 9 (anchored to Phase 8 opportunities)
+  validations: {
+    "<opp_id>": {
+      stakeholders: [
+        {name, role_code, role_label, consulted_date, status_code, status_label, notes}
+      ],
+      answers: {
+        who_uses, business_process, what_breaks, better_tool,
+        required_by, cost_justified, absorbed_by,
+      },
+      overall_status,                 ← not_started | pending | validated | blocked
+      notes,
+      updated_at,
+    }
+  },
+  finalized, finalized_at,
+}
 ```
+
+**Stakeholder roles** (8 from the playbook): IT leadership, Cybersecurity team, Finance, Procurement, Business unit owner, System administrator, Power user, Compliance / legal.
+
+**Stakeholder per-line statuses**: Consulted, Agreed, Pushback, Blocked.
 
 **Issue ID schemes** (deterministic, so ignores stick across reloads):
 - `dup:<sorted product ids joined>` — duplicate product cluster
@@ -399,6 +423,43 @@ The portfolio summary shows two views: an **all-non-rejected** total (proposed +
 - GET `/engagements/<id>/savings/estimate` — printable HTML
 - GET `/engagements/<id>/savings/estimate.csv` — CSV export
 
+## Phase 9 deliverable
+
+The **Stakeholder Validation Notes** — captures, per Phase 8 opportunity, the stakeholder roster consulted and answers to the playbook's seven validation questions. Validation is anchored to opportunities (no orphan validations) so every recommendation has clear lineage. Available as:
+- Workspace: `/engagements/<id>/validation`
+- Printable notes: `/engagements/<id>/validation/notes`
+- CSV export: `/engagements/<id>/validation/notes.csv`
+
+### Stakeholder format
+
+One stakeholder per line, pipe-separated: `Name | Role | YYYY-MM-DD | Status | notes`. Recognized **roles** (case-insensitive, label-or-code accepted): IT leadership, Cybersecurity team, Finance, Procurement, Business unit owner, System administrator, Power user, Compliance / legal. Recognized **statuses**: Consulted, Agreed, Pushback, Blocked. Unrecognized values are kept as free text in `role_label` / `status_label` (with `role_code` / `status_code` blank). Dates are normalized through `_coerce_date` so `5/10/2026` → `2026-05-10`.
+
+### The seven validation questions
+
+1. Who uses this tool?
+2. What business process depends on it?
+3. What would break if it was removed?
+4. Is there a better enterprise tool already available?
+5. Is the tool required by contract, compliance, or customer need?
+6. Is the cost justified by the value?
+7. Can the function be absorbed by another product?
+
+### Overall validation status
+
+`not_started` (no information captured), `pending` (in progress), `validated` (consensus reached, ready for recommendation), `blocked` (stakeholder objection or external dependency holding it up).
+
+### Form behaviour
+
+One form per opportunity, single Save button. Submitting empty everything (no stakeholders, no answers, status `not_started`, no notes) clears the entry from `validation.validations`. The workspace sorts opportunities so blocked / pending appear first and validated appears last — pushes attention to what needs work.
+
+### Routes
+
+- GET `/engagements/<id>/validation` — workspace
+- POST `/engagements/<id>/validation/<opp_id>` — save validation for one opportunity
+- POST `/engagements/<id>/validation/finalize` — finalize / reopen (advances `status` to `recommendations`, pre-marks Phase 10 `in_progress`)
+- GET `/engagements/<id>/validation/notes` — printable HTML
+- GET `/engagements/<id>/validation/notes.csv` — CSV export
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -451,6 +512,11 @@ The portfolio summary shows two views: an **all-non-rejected** total (proposed +
 | `/engagements/<id>/savings/finalize` | POST | Phase 8 — finalize / reopen |
 | `/engagements/<id>/savings/estimate` | GET | Phase 8 — printable estimate |
 | `/engagements/<id>/savings/estimate.csv` | GET | Phase 8 — CSV export |
+| `/engagements/<id>/validation` | GET | Phase 9 — validation workspace |
+| `/engagements/<id>/validation/<oid>` | POST | Phase 9 — save validation for one opportunity |
+| `/engagements/<id>/validation/finalize` | POST | Phase 9 — finalize / reopen |
+| `/engagements/<id>/validation/notes` | GET | Phase 9 — printable validation notes |
+| `/engagements/<id>/validation/notes.csv` | GET | Phase 9 — CSV export |
 
 ## Decisions made
 
@@ -490,11 +556,12 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 6 (AI Assisted Comparison) — auto-run + privacy?~~ **Resolved: auto-run on first visit when stale (background thread), manual re-run button always available; whitelist anonymization with PROD_NNN tokens; vendor / product names retained because they're public; owners / notes / internal systems / engagement metadata stripped; de-anon map ephemeral (never persisted).**
 - ~~Phase 7 (Identify Technical Debt) — per-product flag-checker?~~ **Resolved: yes. 14 debt flags from the playbook, severity selector, free-text notes; auto-suggested flags derived from inventory data (no_owner, unclear_mission, duplicative, unused, poor_adoption, outside_governance, high_cost_low_value, renewal_no_justification); clickable suggestion chips tick the corresponding checkbox; printable register + CSV export.**
 - ~~Phase 8 (Estimate Cost Savings) — separate worksheet or implicit in Phases 5/7?~~ **Resolved: separate worksheet that auto-seeds from Phase 5 dispositions + Phase 7 unused flags. Per-opportunity card with current cost / recurring savings / one-time / migration / training, status (proposed/approved/rejected), and a portfolio rollup that splits "non-rejected" from "approved-only" — the conservative number leadership uses.**
+- ~~Phase 9 (Validate with Stakeholders) — anchor to what?~~ **Resolved: anchor to Phase 8 opportunities. Stakeholder roster (8 role types) parsed from a pipe-separated text block, structured answers to the 7 validation questions, overall status (not_started / pending / validated / blocked), free notes. No orphan validations — every validation lineages back to a savings opportunity.**
 - **`ANTHROPIC_API_KEY` setup** — chip dropped to spin off a separate session that exports the key, restarts the server, and verifies a real Phase 6 run. Not a blocker for further phase work.
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
 - Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
 - Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
-- Phase 9 (Validate with Stakeholders) — the playbook frames this as a series of structured conversations. Likely a per-opportunity validation pane: list of stakeholder roles (IT, Cybersecurity, Finance, Procurement, BU owner, sysadmin, power user, compliance), with status per stakeholder (consulted / agreed / pushback), validation date, notes, and quoted answers to the seven validation questions. Output: stakeholder validation notes deliverable.
+- Phase 10 (Recommendations) — synthesizes Phases 5 (dispositions), 7 (debt), 8 (savings), and 9 (validation) into a structured per-finding recommendation. The playbook calls for: finding, products involved, business impact, technical-debt impact, security impact, cost impact, recommended action, level of effort, risk level, proposed timeline, decision owner. Categories: immediate savings, renewal negotiation, license reduction, product consolidation, product retirement, security risk reduction, governance improvement, further analysis. Likely a per-opportunity recommendation card with auto-fills from prior phases + manual fields for LoE / timeline / decision owner.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -601,3 +668,13 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Updated `_sidebar.html`, `engagement_view.html`, `home.html` to surface Phase 8 as Live.
 - New CSS: `.opp-card` with status-colored left-border (green=approved, blue=proposed, red+dimmed=rejected), `.opp-title-input` (in-place editable title), `.opp-numbers` responsive grid, `.opp-totals` panel with `.opp-total-value` typography, `.opp-quick-actions` footer.
 - Smoke test (Flask test client, file-based): seeded inventory with 3 PM tools + 1 unused product + 1 large CRM. Set Phase 5 dispositions (Asana retire, Trello consolidate, FancySaaS renegotiate) and Phase 7 `unused` on GhostTool. Seed call created exactly 4 opportunities with correct recurring values: Asana $1k (full retire), Trello $300 (consolidate), FancySaaS $4k (20% of $20k renegotiate), GhostTool $5k (cost_per_license × unused count). Re-seed was idempotent (still 4). Edited Asana with $200 migration + $150 training and approved status → totals computed correctly: recurring $1k, first-year $650, transition $350. Status shortcuts moved Trello → approved, FancySaaS → rejected. Summary verified: count=4, approved=2, proposed=1, rejected=1; non-rejected recurring = $6,300; non-rejected first-year = $5,950 (= 6300 − 350 transition); approved-only recurring = $1,300. Custom multi-product opportunity (Jira + Trello bundle) auto-summed to $1,900. Delete worked. Estimate HTML and CSV both render correctly. Finalize advanced engagement to Phase 9 (`validation` pre-marked `in_progress`); reopen reverses. (Caught one test typo — case mismatch in product-name search.)
+
+### 2026-04-28 — Phase 9 build (Validate with Stakeholders)
+
+- Added Phase 9 constants to `app.py`: `STAKEHOLDER_ROLES` (8 — IT leadership, Cybersecurity team, Finance, Procurement, Business unit owner, System administrator, Power user, Compliance / legal), `STAKEHOLDER_STATUSES` (4 — Consulted, Agreed, Pushback, Blocked), `VALIDATION_QUESTIONS` (7, exact text from the playbook with stable keys), `VALIDATION_OVERALL_STATUSES` (4).
+- Helpers: `_ensure_validation`, `_new_validation_record`, `_parse_stakeholders` (parses pipe-separated lines tolerantly — recognizes role labels OR codes case-insensitively, normalizes dates through `_coerce_date`, falls back to free-text labels for unrecognized roles/statuses), `_stakeholders_to_text` (round-trip back to text), `_validation_summary` (counts by overall_status and totals stakeholders recorded).
+- Routes: `engagement_validation` (GET, sorts opps so blocked/pending appear first), `engagement_validation_save` (POST per opp — empty submission removes the record), `engagement_validation_finalize`, `engagement_validation_notes` (printable HTML), `engagement_validation_notes_csv`.
+- New templates: `validation.html` (6 summary tiles, format hint with role/status chip references, per-opp card with stakeholder textarea + 7-question grid + overall-status dropdown + notes input + Save button; status-colored left-border on the card; finalize panel with warning if any opps still in `not_started`) and `validation_notes.html` (printable: summary table + per-opp section showing stakeholder table only when present + question answers grouped via dl, only renders questions that have answers + reference list of all 7 questions).
+- Updated `_sidebar.html`, `engagement_view.html`, `home.html` to surface Phase 9 as Live.
+- New CSS: `.val-card` with status-tinted left-border (good/danger/accent), `.val-questions` two-column grid that collapses to single on narrow screens, `.val-question` typography.
+- Smoke test (file-based): exercised `_parse_stakeholders` over three input shapes (mapped role + agreed status + ISO date; mapped role + lowercase status; unrecognized role + unrecognized status + non-ISO date). All assertions passed: role/status codes map correctly, unrecognized values land in label fields with blank codes, dates normalize through `_coerce_date`. Saved a full validation with 7 answers + 3 stakeholders + validated status — record persisted correctly. Empty submission removed the record from `validation.validations`. Re-saving with content re-created it. `_validation_summary` returns expected counts. Notes HTML and CSV render with the saved data. Finalize advanced engagement to Phase 10 (`recommendations` pre-marked `in_progress`); reopen reverses.

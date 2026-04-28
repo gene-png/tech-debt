@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Stakeholder validation notes · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_validation', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_validation_notes_csv', engagement_id=eng.id) }}">Download .csv</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+<article class="statement">
+  <h1>Stakeholder Validation Notes</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}{% if eng.validation.finalized_at %} · Finalized {{ eng.validation.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Summary</h2>
+  <table class="checklist-table">
+    <tbody>
+      <tr><td>Total opportunities</td><td><strong>{{ summary.opportunity_count }}</strong></td></tr>
+      <tr><td>By status</td><td><strong>{{ summary.by_status.validated }} validated · {{ summary.by_status.pending }} in progress · {{ summary.by_status.blocked }} blocked · {{ summary.by_status.not_started }} not started</strong></td></tr>
+      <tr><td>Validations recorded</td><td><strong>{{ summary.validations_started }}</strong></td></tr>
+      <tr><td>Stakeholders recorded</td><td><strong>{{ summary.stakeholders_recorded }}</strong></td></tr>
+    </tbody>
+  </table>
+
+  {% if not opportunities %}
+    <h2>No validations recorded yet</h2>
+    <p>Begin capturing stakeholder consultations in the validation workspace before publishing this document.</p>
+  {% endif %}
+
+  {% for o in opportunities %}
+    <h2>{{ o.title }}</h2>
+    <div class="meta-line">
+      {{ overall_status_label.get(o.validation.overall_status, o.validation.overall_status) }}
+      {% if o.product_names %} ·
+        {{ o.product_names | join(', ') }}
+      {% endif %}
+    </div>
+
+    {% if o.validation.stakeholders %}
+      <h3 style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 14px 0 6px;">Stakeholders consulted</h3>
+      <table class="checklist-table">
+        <thead><tr><th>Name</th><th>Role</th><th>Date</th><th>Status</th><th>Notes</th></tr></thead>
+        <tbody>
+          {% for s in o.validation.stakeholders %}
+            <tr>
+              <td><strong>{{ s.name }}</strong></td>
+              <td>{{ s.role_label }}</td>
+              <td>{{ s.consulted_date }}</td>
+              <td>{{ s.status_label }}</td>
+              <td>{{ s.notes }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {% set has_answers = o.validation.answers.values() | select | list %}
+    {% if has_answers %}
+      <h3 style="font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 14px 0 6px;">Question answers</h3>
+      <dl class="kv" style="grid-template-columns: 1fr;">
+        {% for key, label in questions %}
+          {% set ans = o.validation.answers.get(key) %}
+          {% if ans %}
+            <dt style="color: var(--text); font-weight: 600; margin-top: 6px;">{{ label }}</dt>
+            <dd style="margin-bottom: 6px;">{{ ans }}</dd>
+          {% endif %}
+        {% endfor %}
+      </dl>
+    {% endif %}
+
+    {% if o.validation.notes %}
+      <p style="margin-top: 10px;"><strong>Additional notes:</strong> {{ o.validation.notes }}</p>
+    {% endif %}
+  {% endfor %}
+
+  <h2>Validation questions reference</h2>
+  <ol>
+    {% for key, label in questions %}
+      <li>{{ label }}</li>
+    {% endfor %}
+  </ol>
+</article>
+{% endblock %}

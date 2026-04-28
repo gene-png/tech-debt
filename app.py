@@ -128,6 +128,43 @@ SAVINGS_STATUSES = [
     ("rejected", "Rejected"),
 ]
 
+# Phase 9 — Stakeholder Validation --------------------------------------------
+
+STAKEHOLDER_ROLES = [
+    ("it_leadership", "IT leadership"),
+    ("cybersecurity", "Cybersecurity team"),
+    ("finance", "Finance"),
+    ("procurement", "Procurement"),
+    ("business_unit_owner", "Business unit owner"),
+    ("system_administrator", "System administrator"),
+    ("power_user", "Power user"),
+    ("compliance_legal", "Compliance / legal"),
+]
+
+STAKEHOLDER_STATUSES = [
+    ("consulted", "Consulted"),
+    ("agreed", "Agreed"),
+    ("pushback", "Pushback"),
+    ("blocked", "Blocked"),
+]
+
+VALIDATION_QUESTIONS = [
+    ("who_uses", "Who uses this tool?"),
+    ("business_process", "What business process depends on it?"),
+    ("what_breaks", "What would break if it was removed?"),
+    ("better_tool", "Is there a better enterprise tool already available?"),
+    ("required_by", "Is the tool required by contract, compliance, or customer need?"),
+    ("cost_justified", "Is the cost justified by the value?"),
+    ("absorbed_by", "Can the function be absorbed by another product?"),
+]
+
+VALIDATION_OVERALL_STATUSES = [
+    ("not_started", "Not started"),
+    ("pending", "In progress"),
+    ("validated", "Validated"),
+    ("blocked", "Blocked"),
+]
+
 # Phase 3 — Build Inventory ---------------------------------------------------
 
 PRODUCT_CATEGORIES = [
@@ -1798,6 +1835,337 @@ def engagement_overlap_analysis_csv(engagement_id):
                 d.get("notes", ""),
             ])
     fn = f"product-overlap-analysis-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — Stakeholder Validation
+# ---------------------------------------------------------------------------
+
+def _ensure_validation(eng):
+    if "validation" in eng and "validations" in eng["validation"]:
+        return False
+    eng["validation"] = {
+        "validations": {},
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _new_validation_record():
+    return {
+        "stakeholders": [],
+        "answers": {key: "" for key, _label in VALIDATION_QUESTIONS},
+        "overall_status": "not_started",
+        "notes": "",
+        "updated_at": "",
+    }
+
+
+def _parse_stakeholders(text):
+    """Parse 'Name | Role | YYYY-MM-DD | Status | notes' lines into records."""
+    role_lookup_label = {l.lower(): k for k, l in STAKEHOLDER_ROLES}
+    role_lookup_code = {k: l for k, l in STAKEHOLDER_ROLES}
+    status_lookup_label = {l.lower(): k for k, l in STAKEHOLDER_STATUSES}
+    status_lookup_code = {k: l for k, l in STAKEHOLDER_STATUSES}
+    out = []
+    for line in _parse_lines(text):
+        parts = [p.strip() for p in line.split("|")]
+        if not parts or not parts[0]:
+            continue
+        rec = {
+            "name": parts[0],
+            "role_code": "",
+            "role_label": "",
+            "consulted_date": "",
+            "status_code": "",
+            "status_label": "",
+            "notes": "",
+        }
+        if len(parts) > 1 and parts[1]:
+            raw = parts[1]
+            low = raw.lower()
+            if low in role_lookup_label:
+                rec["role_code"] = role_lookup_label[low]
+                rec["role_label"] = role_lookup_code[rec["role_code"]]
+            elif low in role_lookup_code:
+                rec["role_code"] = low
+                rec["role_label"] = role_lookup_code[low]
+            else:
+                rec["role_label"] = raw
+        if len(parts) > 2 and parts[2]:
+            rec["consulted_date"] = _coerce_date(parts[2])
+        if len(parts) > 3 and parts[3]:
+            raw = parts[3]
+            low = raw.lower()
+            if low in status_lookup_label:
+                rec["status_code"] = status_lookup_label[low]
+                rec["status_label"] = status_lookup_code[rec["status_code"]]
+            elif low in status_lookup_code:
+                rec["status_code"] = low
+                rec["status_label"] = status_lookup_code[low]
+            else:
+                rec["status_label"] = raw
+        if len(parts) > 4:
+            rec["notes"] = "|".join(parts[4:]).strip()
+        out.append(rec)
+    return out
+
+
+def _stakeholders_to_text(stakeholders):
+    lines = []
+    for s in stakeholders or []:
+        bits = [s.get("name", "")]
+        if s.get("role_label"):
+            bits.append(s["role_label"])
+        if s.get("consulted_date"):
+            bits.append(s["consulted_date"])
+        if s.get("status_label"):
+            bits.append(s["status_label"])
+        if s.get("notes"):
+            bits.append(s["notes"])
+        lines.append(" | ".join(bits))
+    return "\n".join(lines)
+
+
+def _validation_summary(eng):
+    opps = eng.get("savings", {}).get("opportunities", {})
+    val_records = eng.get("validation", {}).get("validations", {})
+    by_status = {"not_started": 0, "pending": 0, "validated": 0, "blocked": 0}
+    total_with_validation = 0
+    total_stakeholders = 0
+    for opp_id in opps:
+        rec = val_records.get(opp_id)
+        st = (rec or {}).get("overall_status", "not_started")
+        if st in by_status:
+            by_status[st] += 1
+        else:
+            by_status["not_started"] += 1
+        if rec and (rec.get("stakeholders") or any(rec.get("answers", {}).values())):
+            total_with_validation += 1
+        if rec:
+            total_stakeholders += len(rec.get("stakeholders", []))
+    return {
+        "opportunity_count": len(opps),
+        "by_status": by_status,
+        "validations_started": total_with_validation,
+        "stakeholders_recorded": total_stakeholders,
+    }
+
+
+@app.route("/engagements/<engagement_id>/validation", methods=["GET"])
+def engagement_validation(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_validation(eng):
+        if (eng["phase_progress"].get("savings") == "complete"
+                and eng["phase_progress"].get("validation") == "not_started"):
+            eng["phase_progress"]["validation"] = "in_progress"
+        storage.save_engagement(eng)
+
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    opps = eng.get("savings", {}).get("opportunities", {})
+
+    # Sort: not-yet-validated first, then by status order, then by recurring savings desc.
+    val_records = eng["validation"]["validations"]
+    status_order = {"blocked": 0, "pending": 1, "not_started": 2, "validated": 3}
+    opps_sorted = sorted(
+        opps.values(),
+        key=lambda o: (
+            status_order.get((val_records.get(o["id"]) or {}).get("overall_status", "not_started"), 4),
+            -float(o.get("recurring_annual_savings") or 0),
+        ),
+    )
+    annotated = []
+    for o in opps_sorted:
+        details = []
+        for pid in o.get("product_ids", []):
+            p = products_by_id.get(pid)
+            if p:
+                details.append({
+                    "product_name": p.get("product_name", ""),
+                    "vendor": p.get("vendor", ""),
+                    "category": p.get("category", ""),
+                })
+        rec = val_records.get(o["id"]) or _new_validation_record()
+        annotated.append({
+            **o,
+            "products": details,
+            "totals": _opportunity_totals(o),
+            "validation": rec,
+            "stakeholders_text": _stakeholders_to_text(rec.get("stakeholders", [])),
+        })
+
+    summary = _validation_summary(eng)
+    return render_template(
+        "validation.html",
+        eng=eng,
+        opportunities=annotated,
+        summary=summary,
+        questions=VALIDATION_QUESTIONS,
+        roles=STAKEHOLDER_ROLES,
+        statuses=STAKEHOLDER_STATUSES,
+        overall_statuses=VALIDATION_OVERALL_STATUSES,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/validation/<opp_id>", methods=["POST"])
+def engagement_validation_save(engagement_id, opp_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_validation(eng)
+    if opp_id not in eng.get("savings", {}).get("opportunities", {}):
+        abort(404)
+
+    rec = eng["validation"]["validations"].get(opp_id) or _new_validation_record()
+    rec["stakeholders"] = _parse_stakeholders(request.form.get("stakeholders", ""))
+    answers = {}
+    for key, _label in VALIDATION_QUESTIONS:
+        answers[key] = request.form.get(f"answer_{key}", "").strip()
+    rec["answers"] = answers
+    overall = request.form.get("overall_status", "").strip()
+    valid_overall = {k for k, _l in VALIDATION_OVERALL_STATUSES}
+    if overall in valid_overall:
+        rec["overall_status"] = overall
+    rec["notes"] = request.form.get("notes", "").strip()
+    rec["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+    # Empty record (no stakeholders, no answers, no overall, no notes) -> drop entirely
+    is_empty = (
+        not rec["stakeholders"]
+        and not any(answers.values())
+        and rec["overall_status"] == "not_started"
+        and not rec["notes"]
+    )
+    if is_empty:
+        eng["validation"]["validations"].pop(opp_id, None)
+    else:
+        eng["validation"]["validations"][opp_id] = rec
+
+    if eng["phase_progress"].get("validation") == "not_started":
+        eng["phase_progress"]["validation"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_validation", engagement_id=engagement_id) + f"#opp-{opp_id}")
+
+
+@app.route("/engagements/<engagement_id>/validation/finalize", methods=["POST"])
+def engagement_validation_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_validation(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["validation"]["finalized"] = False
+        eng["validation"]["finalized_at"] = None
+        eng["phase_progress"]["validation"] = "in_progress"
+        eng["status"] = "validation"
+    else:
+        eng["validation"]["finalized"] = True
+        eng["validation"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["validation"] = "complete"
+        eng["status"] = "recommendations"
+        if eng["phase_progress"].get("recommendations") == "not_started":
+            eng["phase_progress"]["recommendations"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_validation", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/validation/notes")
+def engagement_validation_notes(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_validation(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    opps = eng.get("savings", {}).get("opportunities", {})
+    val_records = eng["validation"]["validations"]
+    status_order = {"validated": 0, "pending": 1, "blocked": 2, "not_started": 3}
+    opps_sorted = sorted(
+        opps.values(),
+        key=lambda o: (
+            status_order.get((val_records.get(o["id"]) or {}).get("overall_status", "not_started"), 4),
+            o.get("title", ""),
+        ),
+    )
+    annotated = []
+    for o in opps_sorted:
+        rec = val_records.get(o["id"])
+        if not rec:
+            continue
+        if not (rec.get("stakeholders") or any(rec.get("answers", {}).values()) or rec.get("notes")):
+            continue
+        details = [products_by_id.get(pid, {}).get("product_name", "")
+                   for pid in o.get("product_ids", []) if pid in products_by_id]
+        annotated.append({**o, "validation": rec, "product_names": details})
+    summary = _validation_summary(eng)
+    return render_template(
+        "validation_notes.html",
+        eng=eng,
+        opportunities=annotated,
+        summary=summary,
+        questions=VALIDATION_QUESTIONS,
+        overall_status_label={k: l for k, l in VALIDATION_OVERALL_STATUSES},
+    )
+
+
+@app.route("/engagements/<engagement_id>/validation/notes.csv")
+def engagement_validation_notes_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_validation(eng)
+    products_by_id = {p["id"]: p for p in eng.get("inventory", {}).get("products", [])}
+    opps = eng.get("savings", {}).get("opportunities", {})
+    val_records = eng["validation"]["validations"]
+    overall_status_label = {k: l for k, l in VALIDATION_OVERALL_STATUSES}
+
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    header = [
+        "Opportunity", "Products", "Overall status",
+        "Stakeholders consulted", "Stakeholders agreed",
+        "Stakeholders pushback", "Stakeholders blocked",
+    ]
+    for _key, label in VALIDATION_QUESTIONS:
+        header.append(label)
+    header.append("Notes")
+    writer.writerow(header)
+
+    for opp_id, rec in val_records.items():
+        opp = opps.get(opp_id)
+        if not opp:
+            continue
+        names = [products_by_id.get(pid, {}).get("product_name", "")
+                 for pid in opp.get("product_ids", []) if pid in products_by_id]
+        sh = rec.get("stakeholders", [])
+        counts = {"consulted": 0, "agreed": 0, "pushback": 0, "blocked": 0}
+        for s in sh:
+            sc = s.get("status_code") or ""
+            if sc in counts:
+                counts[sc] += 1
+        row = [
+            opp.get("title", ""),
+            "; ".join(names),
+            overall_status_label.get(rec.get("overall_status", ""), rec.get("overall_status", "")),
+            counts["consulted"], counts["agreed"], counts["pushback"], counts["blocked"],
+        ]
+        for key, _label in VALIDATION_QUESTIONS:
+            row.append(rec.get("answers", {}).get(key, ""))
+        row.append(rec.get("notes", ""))
+        writer.writerow(row)
+
+    fn = f"stakeholder-validation-notes-{eng.get('id')}.csv"
     return Response(
         sio.getvalue(),
         mimetype="text/csv",
