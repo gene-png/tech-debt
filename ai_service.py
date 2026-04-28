@@ -24,6 +24,18 @@ import threading
 from datetime import datetime
 from typing import Tuple
 
+# Load environment variables from a .env file at the project root if present.
+# Silent no-op if python-dotenv isn't installed or the file doesn't exist —
+# the API-key check elsewhere in this module raises a clean error instead.
+try:
+    from dotenv import load_dotenv
+    # override=True so we win against an empty/stale env var that may exist in
+    # the shell — without this, a blank ANTHROPIC_API_KEY in the OS environment
+    # would silently shadow the value in .env.
+    load_dotenv(override=True)
+except ImportError:
+    pass
+
 import storage
 
 
