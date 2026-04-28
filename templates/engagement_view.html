@@ -146,11 +146,36 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 7 — Identify Technical Debt</h2>
+      {% set td = eng.get('tech_debt') %}
+      {% if td and td.finalized %}
+        <div class="notice">Phase 7 finalized on {{ td.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.tech_debt == 'in_progress' %}
+        <div class="notice warn">Technical-debt review in progress.</div>
+      {% else %}
+        <div class="notice warn">Technical-debt review has not been started.</div>
+      {% endif %}
+      <p class="helper">Per-product flag-checker covering 14 debt categories — unsupported, outdated, unused, duplicative, no owner, weak security, etc. Suggestions auto-derived from inventory data.</p>
+      {% if td and td.flags %}
+        {% set flagged_count = 0 %}
+        {% for pid, rec in td.flags.items() %}{% if rec.flags %}{% set _ = (flagged_count, flagged_count + 1) %}{% endif %}{% endfor %}
+      {% endif %}
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_tech_debt', engagement_id=eng.id) }}">
+          {% if td and td.finalized %}Review debt register{% else %}Open tech debt workspace{% endif %}
+        </a>
+        {% if td and td.flags %}
+          <a class="btn secondary" href="{{ url_for('engagement_tech_debt_register', engagement_id=eng.id) }}">View register</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 7 through 11 of the playbook will activate in upcoming releases — Technical Debt Register, Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phases 8 through 11 of the playbook will activate in upcoming releases — Cost Savings, Stakeholder Validation, Recommendations, and the Executive Summary. The data model already reserves space for them.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}

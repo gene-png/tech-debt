@@ -28,6 +28,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `e9a919b` (2026-04-28) — Phase 5: Identify Product Overlap (8 files changed, +605 lines).
 - `f280ab5` (2026-04-28) — Backfill e9a919b commit hash in change log.
 - `54827a5` (2026-04-28) — Phase 6: AI Assisted Comparison (9 files changed, +785 lines).
+- `5bf593e` (2026-04-28) — Backfill 54827a5 commit hash in change log.
+- *(2026-04-28) Phase 7 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -41,7 +43,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 4 | Normalize the Data             | **Live** |
 | 5 | Identify Product Overlap       | **Live** |
 | 6 | AI Assisted Comparison         | **Live** |
-| 7 | Identify Technical Debt        | Planned  |
+| 7 | Identify Technical Debt        | **Live** |
 | 8 | Estimate Cost Savings          | Planned  |
 | 9 | Validate with Stakeholders     | Planned  |
 | 10 | Create Recommendations        | Planned  |
@@ -137,6 +139,21 @@ ai_review: {                            ← Phase 6
   raw_response,                     ← raw text from Claude (debug)
   error,                            ← string if last run failed
   anonymization_summary: { total_products, redacted_fields, safe_fields },
+  finalized, finalized_at,
+}
+
+tech_debt: {                            ← Phase 7
+  flags: {
+    "<product_id>": {
+      flags: [...]   ← any of: unsupported, outdated_version, unused, duplicative,
+                       no_owner, unclear_mission, outside_governance, no_integration,
+                       weak_security, manual_burden, data_silo, poor_adoption,
+                       high_cost_low_value, renewal_no_justification
+      severity: "low" | "medium" | "high",
+      notes,
+      updated_at,
+    }
+  },
   finalized, finalized_at,
 }
 ```
@@ -288,6 +305,42 @@ When the user navigates to `/ai-review` and findings are stale (no findings yet,
 - POST `/engagements/<id>/ai-review/run` — force re-run.
 - POST `/engagements/<id>/ai-review/finalize` — finalize / reopen. Finalize advances `status` to `tech_debt` and pre-marks Phase 7 as `in_progress`.
 
+## Phase 7 deliverable
+
+The **Technical Debt Findings Register** — captures, per product, which of the 14 debt categories from the playbook apply, plus severity (low/medium/high) and free-text notes. Available as:
+- Workspace: `/engagements/<id>/tech-debt`
+- Printable register: `/engagements/<id>/tech-debt/register`
+- CSV export: `/engagements/<id>/tech-debt/register.csv`
+
+### Auto-suggestions
+
+Each product gets a list of *suggested* flags derived from the inventory it already has. Suggestions are NOT applied automatically — they appear as clickable yellow chips above the flag checkboxes; clicking a chip ticks the corresponding checkbox in the form (vanilla JS, no framework). Logic in `_suggest_debt_flags`:
+
+| Suggested flag | Trigger |
+|----------------|---------|
+| `no_owner` | Any of business / technical / contract owner is blank |
+| `unclear_mission` | `primary_use_case` is blank |
+| `duplicative` | Product's category has 2+ products in the inventory |
+| `unused` | `licenses_assigned > 0` AND `active_users == 0` |
+| `poor_adoption` | `licenses_assigned > 0` AND `0 < active_users < licenses_assigned * 0.2` |
+| `outside_governance` | `purchase_source` contains "card", "personal", "shadow", or "expense" |
+| `high_cost_low_value` | Annual cost ≥ 75th percentile AND `active_users < licenses_purchased * 0.5` |
+| `renewal_no_justification` | Renewal date within 90 days AND `primary_use_case` blank |
+
+Detectors are deliberately conservative (mostly require multiple signals) to keep noise low.
+
+### Filters
+
+The workspace supports three filters via query string: `?flag=<key>` (only rows with that flag), `?severity=<level>`, and `?only_with_debt=1` (hide healthy products). Filter UI sits below the summary tiles.
+
+### Routes
+
+- GET `/engagements/<id>/tech-debt` — workspace (auto-init on first visit, supports filters)
+- POST `/engagements/<id>/tech-debt/<product_id>` — save flags / severity / notes for one product (clears entry if all three are blank)
+- POST `/engagements/<id>/tech-debt/finalize` — finalize / reopen (finalize advances `status` to `savings` and pre-marks Phase 8 as `in_progress`)
+- GET `/engagements/<id>/tech-debt/register` — printable register, sorted by severity (high first) then product name
+- GET `/engagements/<id>/tech-debt/register.csv` — CSV export
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -326,6 +379,11 @@ When the user navigates to `/ai-review` and findings are stale (no findings yet,
 | `/engagements/<id>/ai-review` | GET | Phase 6 — AI review page (auto-runs if stale) |
 | `/engagements/<id>/ai-review/run` | POST | Phase 6 — force re-run in background |
 | `/engagements/<id>/ai-review/finalize` | POST | Phase 6 — finalize / reopen |
+| `/engagements/<id>/tech-debt` | GET | Phase 7 — debt workspace (`?flag=&severity=&only_with_debt=`) |
+| `/engagements/<id>/tech-debt/<pid>` | POST | Phase 7 — save flags / severity / notes per product |
+| `/engagements/<id>/tech-debt/finalize` | POST | Phase 7 — finalize / reopen |
+| `/engagements/<id>/tech-debt/register` | GET | Phase 7 — printable findings register |
+| `/engagements/<id>/tech-debt/register.csv` | GET | Phase 7 — CSV export |
 
 ## Decisions made
 
@@ -363,10 +421,12 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 4 (Normalize) — separate review pass or inline?~~ **Resolved: separate review pass. Eight detectors run live each load, producing findings with stable issue IDs. One-click apply for vendor / category / merge; "ignore with reason" for false positives; remaining findings link to the product editor.**
 - ~~Phase 5 (Identify Overlap) — per-category comparison?~~ **Resolved: yes. Categories with 2+ products surface as overlap candidates; per-product disposition selector + risk + notes; potential savings computed from Retire/Replace/Consolidate dispositions; printable analysis + CSV export.**
 - ~~Phase 6 (AI Assisted Comparison) — auto-run + privacy?~~ **Resolved: auto-run on first visit when stale (background thread), manual re-run button always available; whitelist anonymization with PROD_NNN tokens; vendor / product names retained because they're public; owners / notes / internal systems / engagement metadata stripped; de-anon map ephemeral (never persisted).**
+- ~~Phase 7 (Identify Technical Debt) — per-product flag-checker?~~ **Resolved: yes. 14 debt flags from the playbook, severity selector, free-text notes; auto-suggested flags derived from inventory data (no_owner, unclear_mission, duplicative, unused, poor_adoption, outside_governance, high_cost_low_value, renewal_no_justification); clickable suggestion chips tick the corresponding checkbox; printable register + CSV export.**
+- **`ANTHROPIC_API_KEY` setup** — chip dropped to spin off a separate session that exports the key, restarts the server, and verifies a real Phase 6 run. Not a blocker for further phase work.
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
 - Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
 - Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
-- Phase 7 (Identify Technical Debt) — the playbook's checklist is heavily about ownership/governance gaps + product age/risk. Likely a per-product flag-checker form (similar to Phase 4 normalize) plus a dedicated debt register output; some flags can be auto-suggested from existing inventory fields (e.g. unsupported product flag if version + renewal indicate end-of-life).
+- Phase 8 (Estimate Cost Savings) — much of the math is already implicit in earlier phases (Phase 5 sums savings from Retire/Replace/Consolidate; Phase 7 captures cost in flagged products). Phase 8 should bring it together as a structured savings worksheet: per opportunity, current cost / migration cost / training cost / first-year savings / recurring savings, plus a portfolio rollup. Likely a list of "savings opportunity" objects keyed off the Phase 5 dispositions and Phase 7 flags.
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -450,3 +510,15 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Updated `_sidebar.html` to enable Phase 6 link, `engagement_view.html` to surface a Phase 6 panel showing finding count or run status, `home.html` to mark Phase 6 as Live.
 - New CSS: `.privacy-card` (green banner), `.spinner` + `@keyframes spin` for the running state, `.ai-finding` with accent left-border, `.ai-finding-row` two-column label/value layout, `.ai-finding-products` for clickable product tags.
 - Smoke test exercised: anonymization (zero sensitive strings in payload, vendor/product names retained, anonymized PROD_NNN ID assignment, all 4 redacted fields confirmed absent), hash determinism, `_parse_findings_json` over three input forms (direct, fenced, prose-with-fence), de-anonymization (real product names + IDs come back through the map), page renders 200 in no-key state and in with-findings state, finalize/reopen transitions advance engagement to `tech_debt`. The actual Claude API call is verified by hand once `ANTHROPIC_API_KEY` is exported — the test fixture seeds the engagement with completed findings to exercise the rendering path without making a real network call.
+
+### 2026-04-28 — Phase 7 build (Identify Technical Debt)
+
+- Added Phase 7 constants to `app.py`: `TECH_DEBT_FLAGS` (14 flags from the playbook, each with a key + label + helper-text shown in tooltip / register definitions section) and `DEBT_SEVERITIES` (low/medium/high).
+- Helpers: `_ensure_tech_debt`, `_suggest_debt_flags` (8 inventory-derived auto-suggestions: missing-owner, unclear mission, duplicative-by-category, unused, poor-adoption, outside-governance via `purchase_source` heuristic, top-quartile-cost-low-utilization, near-renewal-no-justification within 90 days), `_tech_debt_summary` (rollup including per-flag counts, severity breakdown, and total annual cost in flagged products).
+- Routes: `engagement_tech_debt` (GET with `?flag=&severity=&only_with_debt=` filters), `engagement_tech_debt_save` (POST per product — clears the entry if all of flags/severity/notes are blank), `engagement_tech_debt_finalize`, `engagement_tech_debt_register` (printable HTML), `engagement_tech_debt_register_csv`.
+- New templates: `tech_debt.html` (5 summary tiles, filter row, per-product card with the product header line + suggestion chips + 14-flag checkbox grid + severity dropdown + notes input + Save button per row, vanilla JS to make suggestion chips tick the matching checkbox in their row), `tech_debt_register.html` (printable: summary table + flagged-products list sorted by severity then name + reference table of all 14 debt categories with definitions).
+- Updated `_sidebar.html` (Phase 7 link), `engagement_view.html` (Phase 7 panel), `home.html` (Phase 7 marked Live).
+- New CSS: `.debt-row` with red left-border when flagged, `.debt-suggestions` + `.debt-sugg-chip` (yellow dashed-border chips), `.debt-flag-grid` (responsive 220px columns), `.debt-register-item` for the printable view.
+- Smoke test (Flask test client, file-based): seeded 6 products covering each detector path. Verified suggestions: ShadowApp gets `no_owner` + `unclear_mission` + `duplicative` + `outside_governance`; GhostTool (100 assigned, 0 active) gets `unused`; DustyTool (5/100 active) gets `poor_adoption`; FancySaaS (top-quartile cost, 200/1000 users) gets `high_cost_low_value`; Okta gets nothing (healthy). Saved high-severity flags on ShadowApp + medium on GhostTool + low on DustyTool. Empty submission for Okta correctly omits it from the flags map. Filter-by-severity, filter-by-flag, only-with-debt all return correct subsets. Register HTML and CSV both render with 3 flagged products. Finalize advances engagement to Phase 8 (`savings` pre-marked `in_progress`); reopen reverses.
+
+- Spawned a follow-up task chip: "Set up ANTHROPIC_API_KEY for Phase 6" — covers exporting the key, restarting the server, verifying a real Phase 6 run, and confirming the privacy claims (no sensitive strings in `ai_review.raw_response`).

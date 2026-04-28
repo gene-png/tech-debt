@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% block title %}Technical debt · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'tech_debt' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 7 — Identify Technical Debt</h1>
+      <p class="lead">Flag every product with the categories of debt it creates — not only old software, but anything that adds cost, complexity, risk, or operational burden. Suggested flags are derived from data already captured; you decide which actually apply.</p>
+
+      {% set td = eng.tech_debt %}
+      {% if td.finalized %}
+        <div class="notice">Phase 7 finalized on {{ td.finalized_at[:10] }}.</div>
+      {% endif %}
+      {% if not eng.inventory or not eng.inventory.products %}
+        <div class="notice warn">The inventory is empty. <a href="{{ url_for('engagement_inventory', engagement_id=eng.id) }}">Build the inventory in Phase 3</a> first.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.products_with_debt }} / {{ summary.total_products }}</div><div class="lbl">Products flagged</div></div>
+        <div class="summary-tile danger"><div class="num">{{ summary.severity_counts.high }}</div><div class="lbl">High severity</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.severity_counts.medium }}</div><div class="lbl">Medium</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.severity_counts.low }}</div><div class="lbl">Low</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.debt_annual | money }}</div><div class="lbl">Annual cost in debt</div></div>
+      </div>
+
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('engagement_tech_debt_register', engagement_id=eng.id) }}">View debt register</a>
+        <a class="btn secondary" href="{{ url_for('engagement_tech_debt_register_csv', engagement_id=eng.id) }}">Download .csv</a>
+      </div>
+    </div>
+
+    {# ----- Filters ----- #}
+    <div class="panel">
+      <form method="get" class="inventory-filters">
+        <div class="row" style="align-items: end;">
+          <div class="col" style="flex: 0 0 240px;">
+            <label>Filter by flag</label>
+            <select name="flag">
+              <option value="">All flags</option>
+              {% for k, l, _h in debt_flags %}
+                <option value="{{ k }}" {% if k == flag_filter %}selected{% endif %}>{{ l }} ({{ summary.flag_counts.get(k, 0) }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col" style="flex: 0 0 180px;">
+            <label>Filter by severity</label>
+            <select name="severity">
+              <option value="">All</option>
+              {% for k, l in severities %}
+                <option value="{{ k }}" {% if k == severity_filter %}selected{% endif %}>{{ l }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col" style="flex: 0 0 200px;">
+            <label class="checkbox" style="margin-top: 4px;">
+              <input type="checkbox" name="only_with_debt" value="1" {% if only_with_debt %}checked{% endif %}>
+              <span>Only flagged products</span>
+            </label>
+          </div>
+          <div class="col" style="flex: 0 0 110px;">
+            <button class="btn secondary" type="submit">Filter</button>
+          </div>
+          {% if flag_filter or severity_filter or only_with_debt %}
+            <div class="col" style="flex: 0 0 80px;">
+              <a class="btn-link" href="{{ url_for('engagement_tech_debt', engagement_id=eng.id) }}">clear</a>
+            </div>
+          {% endif %}
+        </div>
+      </form>
+    </div>
+
+    {# ----- Per-product debt rows ----- #}
+    {% if rows %}
+      {% for row in rows %}
+        {% set p = row.product %}
+        {% set has_flags = row.flags | length > 0 %}
+        <div class="panel debt-row {% if has_flags %}debt-flagged{% endif %}" id="row-{{ p.id }}">
+          <div class="debt-row-header">
+            <div>
+              <a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}" style="font-weight: 600; font-size: 15px;">{{ p.product_name }}</a>
+              {% if p.vendor %}<span class="meta"> · {{ p.vendor }}</span>{% endif %}
+              {% if p.category %} <span class="tag cat">{{ p.category }}</span>{% endif %}
+            </div>
+            <div class="meta" style="text-align: right;">
+              {% if p.licenses_purchased %}{{ p.licenses_purchased }} lic.{% endif %}
+              {% if p.active_users %} · {{ p.active_users }} active{% endif %}
+              {% if p.total_annual_cost %} · {{ p.total_annual_cost | money }}/yr{% endif %}
+              {% if p.renewal_date %} · renews {{ p.renewal_date }}{% endif %}
+            </div>
+          </div>
+
+          {% if row.suggestions %}
+            <div class="debt-suggestions">
+              <span class="debt-sugg-label">Suggested:</span>
+              {% for s in row.suggestions %}
+                {% set lbl = (debt_flags | selectattr(0, 'equalto', s) | first)[1] %}
+                <span class="debt-sugg-chip" data-flag="{{ s }}" data-row="{{ p.id }}" title="Click to add this flag below">{{ lbl }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          <form method="post" action="{{ url_for('engagement_tech_debt_save', engagement_id=eng.id, product_id=p.id) }}">
+            <div class="debt-flag-grid">
+              {% for k, l, h in debt_flags %}
+                <label class="checkbox" title="{{ h }}">
+                  <input type="checkbox" name="flags" value="{{ k }}" data-row="{{ p.id }}" data-flag="{{ k }}" {% if k in row.flags %}checked{% endif %}>
+                  <span>{{ l }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            <div class="row" style="margin-top: 10px;">
+              <div class="col" style="flex: 0 0 180px;">
+                <label>Severity</label>
+                <select name="severity">
+                  <option value="">—</option>
+                  {% for k, l in severities %}
+                    <option value="{{ k }}" {% if row.severity == k %}selected{% endif %}>{{ l }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="col">
+                <label>Notes</label>
+                <input type="text" name="notes" value="{{ row.notes or '' }}" placeholder="why this is debt, what it would take to address, owner ask…">
+              </div>
+              <div class="col" style="flex: 0 0 110px; align-self: end;">
+                <button class="btn secondary" type="submit">Save</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="panel">
+        <div class="empty">
+          {% if eng.inventory and eng.inventory.products %}
+            {% if flag_filter or severity_filter or only_with_debt %}
+              No products match the current filters.
+            {% else %}
+              No products to review.
+            {% endif %}
+          {% else %}
+            Add products to the inventory first.
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    <script>
+      // Click a suggestion chip to tick the matching flag checkbox in that row.
+      document.querySelectorAll('.debt-sugg-chip').forEach(function (chip) {
+        chip.addEventListener('click', function () {
+          var row = chip.dataset.row;
+          var flag = chip.dataset.flag;
+          var box = document.querySelector('input[type=checkbox][data-row="' + row + '"][data-flag="' + flag + '"]');
+          if (box) { box.checked = true; box.scrollIntoView({block: 'center'}); chip.style.display = 'none'; }
+        });
+      });
+    </script>
+
+    <div class="panel">
+      <h2>Finalize Phase 7</h2>
+      <p class="helper">Lock the technical-debt findings register once you've worked through the inventory. Phase 8 (Estimate Cost Savings) activates next.</p>
+      <form method="post" action="{{ url_for('engagement_tech_debt_finalize', engagement_id=eng.id) }}">
+        {% if td.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 7</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 7</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

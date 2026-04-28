@@ -27,11 +27,13 @@
           <a href="{{ url_for('engagement_overlap', engagement_id=eng.id) }}">{{ label }}</a>
         {% elif key == 'ai_review' %}
           <a href="{{ url_for('engagement_ai_review', engagement_id=eng.id) }}">{{ label }}</a>
+        {% elif key == 'tech_debt' %}
+          <a href="{{ url_for('engagement_tech_debt', engagement_id=eng.id) }}">{{ label }}</a>
         {% else %}
           <span style="opacity: 0.6;">{{ label }}</span>
         {% endif %}
       </li>
     {% endfor %}
   </ul>
-  <p class="helper" style="margin-top: 10px;">Phases 1 through 6 are live. Phases 7–11 are part of the playbook roadmap and will activate in future releases.</p>
+  <p class="helper" style="margin-top: 10px;">Phases 1 through 7 are live. Phases 8–11 are part of the playbook roadmap and will activate in future releases.</p>
 </aside>

@@ -689,3 +689,78 @@ input:focus, textarea:focus, select:focus {
   font-weight: 600;
   padding-top: 1px;
 }
+
+/* ---------- Phase 7: technical debt ---------- */
+
+.debt-row {
+  border-left: 3px solid var(--border-strong);
+}
+.debt-row.debt-flagged {
+  border-left-color: var(--danger);
+}
+.debt-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.debt-row-header .meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.debt-suggestions {
+  margin: 6px 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.debt-sugg-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.debt-sugg-chip {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #fff8e8;
+  border: 1px dashed #efd693;
+  color: #8d6707;
+  cursor: pointer;
+  font-size: 12px;
+  user-select: none;
+}
+.debt-sugg-chip:hover {
+  background: #fff3d3;
+}
+
+.debt-flag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 12px;
+  margin: 8px 0 6px;
+}
+.debt-flag-grid .checkbox {
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.debt-register-item {
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+}
+.debt-register-item:last-child { border-bottom: none; }
+.debt-register-head {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.debt-register-head .status-pill {
+  margin-left: 10px;
+  vertical-align: middle;
+}

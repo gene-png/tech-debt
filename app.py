@@ -71,6 +71,46 @@ REMOVAL_RISKS = [
 # Dispositions that imply a product would no longer cost money once acted on.
 SAVINGS_DISPOSITIONS = {"retire", "replace", "consolidate"}
 
+# Phase 7 — Technical Debt ----------------------------------------------------
+
+# Each entry: (key, label, helper-text shown in tooltip / register).
+TECH_DEBT_FLAGS = [
+    ("unsupported", "Unsupported software",
+     "Product is past vendor end-of-life or no longer receiving security patches."),
+    ("outdated_version", "Outdated version",
+     "Running a release significantly behind current; upgrade is overdue."),
+    ("unused", "Unused product",
+     "Licenses are paid for but very few or no active users."),
+    ("duplicative", "Duplicative tool",
+     "Functionally overlapping with another tool already in scope."),
+    ("no_owner", "No clear owner",
+     "Missing business, technical, or contract owner."),
+    ("unclear_mission", "Unclear mission need",
+     "The business need this product serves is undocumented or unverified."),
+    ("outside_governance", "Purchased outside governance",
+     "Acquired via expense card, shadow IT, or a non-IT department without review."),
+    ("no_integration", "Does not integrate",
+     "Lacks integration with current systems; creates manual hand-offs."),
+    ("weak_security", "Weak security controls",
+     "Insufficient SSO, MFA, encryption, or access controls; flagged by security team."),
+    ("manual_burden", "Excessive manual work",
+     "Operating the product requires meaningful manual effort that should be automated."),
+    ("data_silo", "Creates a data silo",
+     "Holds important data not accessible to other systems or stakeholders."),
+    ("poor_adoption", "Poor adoption",
+     "Targeted users have not adopted the product despite training or rollout."),
+    ("high_cost_low_value", "High cost, low value",
+     "Annual cost is large relative to the business value the product delivers."),
+    ("renewal_no_justification", "Nearing renewal without justification",
+     "Renewal is approaching and there is no documented case to renew."),
+]
+
+DEBT_SEVERITIES = [
+    ("low", "Low"),
+    ("medium", "Medium"),
+    ("high", "High"),
+]
+
 # Phase 3 — Build Inventory ---------------------------------------------------
 
 PRODUCT_CATEGORIES = [
@@ -1741,6 +1781,310 @@ def engagement_overlap_analysis_csv(engagement_id):
                 d.get("notes", ""),
             ])
     fn = f"product-overlap-analysis-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Identify Technical Debt
+# ---------------------------------------------------------------------------
+
+def _ensure_tech_debt(eng):
+    if "tech_debt" in eng and "flags" in eng["tech_debt"]:
+        return False
+    eng["tech_debt"] = {
+        "flags": {},  # product_id -> {flags: [...], severity: "", notes: "", updated_at: "..."}
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _suggest_debt_flags(eng):
+    """
+    Auto-suggest which flags might apply to each product, based on data already
+    captured. Suggestions are NOT applied automatically — the user decides.
+    Returns {product_id: [flag_keys]}.
+    """
+    products = eng.get("inventory", {}).get("products", [])
+    overlap_categories = set()
+    cat_counts = {}
+    for p in products:
+        cat = (p.get("category") or "").strip()
+        if cat:
+            cat_counts[cat] = cat_counts.get(cat, 0) + 1
+    overlap_categories = {c for c, n in cat_counts.items() if n >= 2}
+
+    annual_costs = []
+    for p in products:
+        ac = _safe_float(p.get("total_annual_cost"))
+        if ac > 0:
+            annual_costs.append(ac)
+    high_cost_threshold = 0
+    if annual_costs:
+        sorted_costs = sorted(annual_costs)
+        # 75th percentile (top quartile) as the "high cost" threshold
+        idx = int(len(sorted_costs) * 0.75)
+        high_cost_threshold = sorted_costs[min(idx, len(sorted_costs) - 1)]
+
+    today_iso = datetime.utcnow().date().isoformat()
+
+    suggestions = {}
+    for p in products:
+        suggested = []
+        # no_owner
+        if not (p.get("business_owner") and p.get("technical_owner") and p.get("contract_owner")):
+            suggested.append("no_owner")
+        # unclear_mission
+        if not (p.get("primary_use_case") or "").strip():
+            suggested.append("unclear_mission")
+        # duplicative
+        cat = (p.get("category") or "").strip()
+        if cat in overlap_categories:
+            suggested.append("duplicative")
+        # unused / poor_adoption  — separate signals
+        purchased = _safe_int(p.get("licenses_purchased"))
+        assigned = _safe_int(p.get("licenses_assigned"))
+        users = _safe_int(p.get("active_users"))
+        if assigned > 0 and users == 0:
+            suggested.append("unused")
+        elif assigned > 0 and users > 0 and users < assigned * 0.2:
+            suggested.append("poor_adoption")
+        # outside_governance — heuristic on purchase_source
+        src = (p.get("purchase_source") or "").lower()
+        if any(tag in src for tag in ("card", "personal", "shadow", "expense")):
+            suggested.append("outside_governance")
+        # high_cost_low_value
+        ac = _safe_float(p.get("total_annual_cost"))
+        if (high_cost_threshold > 0
+                and ac >= high_cost_threshold
+                and purchased > 0
+                and users < purchased * 0.5):
+            suggested.append("high_cost_low_value")
+        # renewal_no_justification — within 90 days AND missing primary_use_case
+        rd = (p.get("renewal_date") or "").strip()
+        if rd and rd >= today_iso:
+            try:
+                from datetime import datetime as _dt
+                rdate = _dt.strptime(rd, "%Y-%m-%d").date()
+                today = _dt.utcnow().date()
+                days = (rdate - today).days
+                if 0 <= days <= 90 and not (p.get("primary_use_case") or "").strip():
+                    suggested.append("renewal_no_justification")
+            except ValueError:
+                pass
+        suggestions[p["id"]] = suggested
+    return suggestions
+
+
+def _tech_debt_summary(eng):
+    flags_map = eng.get("tech_debt", {}).get("flags", {})
+    products = eng.get("inventory", {}).get("products", [])
+    pids_with_debt = [pid for pid, rec in flags_map.items() if rec.get("flags")]
+    flag_counts = {key: 0 for key, _label, _help in TECH_DEBT_FLAGS}
+    severity_counts = {"low": 0, "medium": 0, "high": 0}
+    debt_annual = 0.0
+    products_by_id = {p["id"]: p for p in products}
+    for pid in pids_with_debt:
+        rec = flags_map.get(pid, {})
+        for f in rec.get("flags", []):
+            if f in flag_counts:
+                flag_counts[f] += 1
+        sev = (rec.get("severity") or "").lower()
+        if sev in severity_counts:
+            severity_counts[sev] += 1
+        p = products_by_id.get(pid)
+        if p:
+            debt_annual += _safe_float(p.get("total_annual_cost"))
+    return {
+        "products_with_debt": len(pids_with_debt),
+        "total_products": len(products),
+        "flag_counts": flag_counts,
+        "severity_counts": severity_counts,
+        "debt_annual": debt_annual,
+    }
+
+
+@app.route("/engagements/<engagement_id>/tech-debt", methods=["GET"])
+def engagement_tech_debt(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_tech_debt(eng):
+        if (eng["phase_progress"].get("ai_review") == "complete"
+                and eng["phase_progress"].get("tech_debt") == "not_started"):
+            eng["phase_progress"]["tech_debt"] = "in_progress"
+        storage.save_engagement(eng)
+
+    products = eng.get("inventory", {}).get("products", [])
+    suggestions = _suggest_debt_flags(eng)
+    summary = _tech_debt_summary(eng)
+
+    severity_filter = request.args.get("severity", "").strip()
+    flag_filter = request.args.get("flag", "").strip()
+    only_with_debt = request.args.get("only_with_debt") == "1"
+
+    # Build a list of rows (one per product) annotated with current flags + suggestions.
+    flags_map = eng["tech_debt"]["flags"]
+    rows = []
+    for p in products:
+        rec = flags_map.get(p["id"], {})
+        cur_flags = set(rec.get("flags", []))
+        sug = [s for s in suggestions.get(p["id"], []) if s not in cur_flags]
+        if only_with_debt and not cur_flags:
+            continue
+        if severity_filter and rec.get("severity") != severity_filter:
+            continue
+        if flag_filter and flag_filter not in cur_flags:
+            continue
+        rows.append({
+            "product": p,
+            "flags": list(cur_flags),
+            "severity": rec.get("severity", ""),
+            "notes": rec.get("notes", ""),
+            "suggestions": sug,
+        })
+
+    return render_template(
+        "tech_debt.html",
+        eng=eng,
+        rows=rows,
+        debt_flags=TECH_DEBT_FLAGS,
+        severities=DEBT_SEVERITIES,
+        summary=summary,
+        severity_filter=severity_filter,
+        flag_filter=flag_filter,
+        only_with_debt=only_with_debt,
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/tech-debt/<product_id>", methods=["POST"])
+def engagement_tech_debt_save(engagement_id, product_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_tech_debt(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    if not any(p["id"] == product_id for p in products):
+        abort(404)
+
+    selected = request.form.getlist("flags")
+    valid_keys = {key for key, _l, _h in TECH_DEBT_FLAGS}
+    selected = [k for k in selected if k in valid_keys]
+    severity = request.form.get("severity", "").strip()
+    if severity and severity not in {k for k, _l in DEBT_SEVERITIES}:
+        severity = ""
+    notes = request.form.get("notes", "").strip()
+
+    if not (selected or severity or notes):
+        eng["tech_debt"]["flags"].pop(product_id, None)
+    else:
+        eng["tech_debt"]["flags"][product_id] = {
+            "flags": selected,
+            "severity": severity,
+            "notes": notes,
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+        }
+    if eng["phase_progress"].get("tech_debt") == "not_started":
+        eng["phase_progress"]["tech_debt"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_tech_debt", engagement_id=engagement_id) + f"#row-{product_id}")
+
+
+@app.route("/engagements/<engagement_id>/tech-debt/finalize", methods=["POST"])
+def engagement_tech_debt_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_tech_debt(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["tech_debt"]["finalized"] = False
+        eng["tech_debt"]["finalized_at"] = None
+        eng["phase_progress"]["tech_debt"] = "in_progress"
+        eng["status"] = "tech_debt"
+    else:
+        eng["tech_debt"]["finalized"] = True
+        eng["tech_debt"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["tech_debt"] = "complete"
+        eng["status"] = "savings"
+        if eng["phase_progress"].get("savings") == "not_started":
+            eng["phase_progress"]["savings"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_tech_debt", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/tech-debt/register")
+def engagement_tech_debt_register(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_tech_debt(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    flags_map = eng["tech_debt"]["flags"]
+    flag_label = {k: l for k, l, _h in TECH_DEBT_FLAGS}
+    severity_label = dict(DEBT_SEVERITIES)
+    rows = []
+    for pid, rec in flags_map.items():
+        if not rec.get("flags"):
+            continue
+        p = products_by_id.get(pid)
+        if not p:
+            continue
+        rows.append({
+            "product": p,
+            "flags": rec.get("flags", []),
+            "severity": rec.get("severity", ""),
+            "notes": rec.get("notes", ""),
+        })
+    rows.sort(key=lambda r: ({"high": 0, "medium": 1, "low": 2}.get(r["severity"], 3),
+                              r["product"].get("product_name", "")))
+    summary = _tech_debt_summary(eng)
+    return render_template(
+        "tech_debt_register.html",
+        eng=eng, rows=rows, summary=summary,
+        flag_label=flag_label, severity_label=severity_label,
+        debt_flags=TECH_DEBT_FLAGS,
+    )
+
+
+@app.route("/engagements/<engagement_id>/tech-debt/register.csv")
+def engagement_tech_debt_register_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_tech_debt(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    flag_label = {k: l for k, l, _h in TECH_DEBT_FLAGS}
+    severity_label = dict(DEBT_SEVERITIES)
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([
+        "Product", "Vendor", "Category", "Annual cost",
+        "Severity", "Flags", "Notes",
+    ])
+    for pid, rec in eng["tech_debt"]["flags"].items():
+        if not rec.get("flags"):
+            continue
+        p = products_by_id.get(pid)
+        if not p:
+            continue
+        writer.writerow([
+            p.get("product_name", ""),
+            p.get("vendor", ""),
+            p.get("category", ""),
+            p.get("total_annual_cost", ""),
+            severity_label.get(rec.get("severity", ""), ""),
+            "; ".join(flag_label.get(f, f) for f in rec.get("flags", [])),
+            rec.get("notes", ""),
+        ])
+    fn = f"tech-debt-register-{eng.get('id')}.csv"
     return Response(
         sio.getvalue(),
         mimetype="text/csv",

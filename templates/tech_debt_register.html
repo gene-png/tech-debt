@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Technical debt register · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_tech_debt', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_tech_debt_register_csv', engagement_id=eng.id) }}">Download .csv</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+<article class="statement">
+  <h1>Technical Debt Findings Register</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}{% if eng.tech_debt.finalized_at %} · Finalized {{ eng.tech_debt.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Summary</h2>
+  <table class="checklist-table">
+    <tbody>
+      <tr><td>Products with debt flagged</td><td><strong>{{ summary.products_with_debt }} of {{ summary.total_products }}</strong></td></tr>
+      <tr><td>Annual cost in flagged products</td><td><strong>{{ summary.debt_annual | money }}</strong></td></tr>
+      <tr><td>By severity</td><td><strong>{{ summary.severity_counts.high }} high · {{ summary.severity_counts.medium }} medium · {{ summary.severity_counts.low }} low</strong></td></tr>
+    </tbody>
+  </table>
+
+  {% if not rows %}
+    <h2>No technical debt flagged</h2>
+    <p>No products have been flagged with technical-debt categories. Phase 7 may have been finalized as a clean baseline, or every product is currently considered healthy.</p>
+  {% else %}
+    <h2>Flagged products</h2>
+    <p class="meta-line">Sorted by severity (high first), then product name.</p>
+    {% for r in rows %}
+      {% set p = r.product %}
+      <div class="debt-register-item">
+        <div class="debt-register-head">
+          <strong>{{ p.product_name }}</strong>
+          {% if p.vendor %} — {{ p.vendor }}{% endif %}
+          {% if r.severity %}<span class="status-pill status-{% if r.severity == 'high' %}waived{% elif r.severity == 'medium' %}requested{% else %}not_applicable{% endif %}">{{ severity_label.get(r.severity, r.severity) | upper }}</span>{% endif %}
+        </div>
+        <div class="meta-line">
+          {% if p.category %}{{ p.category }} · {% endif %}
+          {% if p.total_annual_cost %}{{ p.total_annual_cost | money }}/yr · {% endif %}
+          {% if p.renewal_date %}renews {{ p.renewal_date }}{% endif %}
+        </div>
+        <p>
+          <strong>Flags:</strong>
+          {% for f in r.flags %}<span class="tag cat">{{ flag_label.get(f, f) }}</span>{% endfor %}
+        </p>
+        {% if r.notes %}<p><strong>Notes:</strong> {{ r.notes }}</p>{% endif %}
+      </div>
+    {% endfor %}
+  {% endif %}
+
+  <h2>Debt categories reference</h2>
+  <table class="checklist-table">
+    <thead><tr><th style="width: 220px;">Category</th><th>Definition</th></tr></thead>
+    <tbody>
+      {% for k, l, h in debt_flags %}
+        <tr><td><strong>{{ l }}</strong></td><td>{{ h }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</article>
+{% endblock %}
