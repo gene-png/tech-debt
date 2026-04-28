@@ -27,7 +27,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `f4cbb98` (2026-04-28) — Backfill fd36790 commit hash in change log.
 - `e9a919b` (2026-04-28) — Phase 5: Identify Product Overlap (8 files changed, +605 lines).
 - `f280ab5` (2026-04-28) — Backfill e9a919b commit hash in change log.
-- *(2026-04-28) Phase 6 build pending push.*
+- `54827a5` (2026-04-28) — Phase 6: AI Assisted Comparison (9 files changed, +785 lines).
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
