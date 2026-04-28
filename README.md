@@ -1,52 +1,73 @@
 # Software Rationalization Workbench
 
-Web-accessible dashboard that walks an engagement through the **Software Inventory, License Review, and Technical Debt Reduction Playbook**.
+A consultant's workbench that walks a customer engagement end-to-end through the **Software Inventory, License Review, and Technical Debt Reduction Playbook** — from defining scope to delivering an executive briefing.
 
-This is a standalone Flask app, separate from the TSMA assessment app in the parent directory.
+Standalone Flask app. JSON file storage. No build step. Single-user local workbench by default.
 
 ## Status
 
-| Phase | Description                       | Status   |
-|-------|-----------------------------------|----------|
-| 1     | Define the Scope                  | **Live** |
-| 2     | Request Customer Data             | Planned  |
-| 3     | Build the Software Inventory      | Planned  |
-| 4     | Normalize the Data                | Planned  |
-| 5     | Identify Product Overlap          | Planned  |
-| 6     | AI Assisted Comparison            | Planned  |
-| 7     | Identify Technical Debt           | Planned  |
-| 8     | Estimate Cost Savings             | Planned  |
-| 9     | Validate with Stakeholders        | Planned  |
-| 10    | Create Recommendations            | Planned  |
-| 11    | Create the Executive Summary      | Planned  |
+All 11 playbook phases are live:
 
-## Run
+| # | Phase | Deliverable |
+|---|---|---|
+| 1 | Define the Scope | Software Review Scope Statement |
+| 2 | Request Customer Data | Customer Data Request Checklist |
+| 3 | Build the Software Inventory | Master Software Inventory (XLSX/CSV) |
+| 4 | Normalize the Data | Cleaned & categorized inventory |
+| 5 | Identify Product Overlap | Product Overlap Analysis |
+| 6 | AI Assisted Comparison | Claude-powered findings (anonymized) |
+| 7 | Identify Technical Debt | Technical Debt Findings Register |
+| 8 | Estimate Cost Savings | Cost Savings Estimate |
+| 9 | Validate with Stakeholders | Stakeholder Validation Notes |
+| 10 | Create Recommendations | Software Rationalization Recommendation Report |
+| 11 | Executive Summary | Executive Briefing |
+
+## Quick start
 
 ```bash
-cd software_rationalization
 pip install -r requirements.txt
 python app.py
 ```
 
-The app listens on **http://localhost:5055**.
+Open http://localhost:5055.
 
-## Storage
+For Phase 6 (AI review), create a `.env` file in this folder with:
 
-Engagements are persisted as JSON files under `data/`. Delete the file to delete an engagement. The `data/` folder is gitignored.
+```
+ANTHROPIC_API_KEY=sk-ant-api03-yourkeyhere
+```
 
-## Data model
+## Documentation
 
-Each engagement file contains:
+- **[USER_GUIDE.md](USER_GUIDE.md)** — the consultant's manual: how to run an engagement end-to-end, phase by phase, with tips and a deliverables reference. **Start here.**
+- **[techdebtcontext.md](techdebtcontext.md)** — running developer log of decisions, data model, architecture, and per-phase implementation notes. Useful if you're extending the workbench.
 
-- `id`, `name`, `client`, `lead`, `created_at`, `updated_at`, `status`
-- `phase_progress` — one of `not_started` / `in_progress` / `complete` for each of the 11 phases
-- `scope` — Phase 1 fields (business units, tool categories, purchase sources, renewal window, contract/technical/business owners, objectives, constraints, finalize state)
+## Privacy at a glance
 
-Phases 2–11 will add their own top-level keys (e.g. `inventory`, `overlap`, `tech_debt`, `recommendations`) without changing existing fields.
+- Engagement data lives in `data/` (gitignored). Customer documents live in `data/uploads/` (gitignored).
+- The Anthropic API key lives in `.env` (gitignored).
+- Phase 6 anonymizes the inventory before sending to Claude — owner names, internal system names, free-text notes, engagement metadata are all stripped. Vendor / product names are retained because the AI needs them to reason about overlap. De-anonymization happens locally before display. Full details in [USER_GUIDE.md § Privacy and data handling](USER_GUIDE.md#privacy-and-data-handling).
 
-## Phase 1 output
+## Stack
 
-Once the scope is finalized, the **Software Review Scope Statement** is available at:
+Flask + Jinja2 + plain CSS (no build step). `openpyxl` for XLSX I/O. `python-dotenv` for `.env` loading. `anthropic` for the Claude API. JSON file storage — one file per engagement.
 
-- HTML: `/engagements/<id>/scope/statement` (printable)
-- Plain text download: `/engagements/<id>/scope/statement.txt`
+Listens on port 5055.
+
+## Repo layout
+
+```
+software_rationalization/
+├── app.py                    # all Flask routes + helpers per phase
+├── ai_service.py             # Phase 6 anonymization + Claude API + worker
+├── storage.py                # engagement JSON I/O
+├── templates/                # Jinja2 templates (one per phase + shared)
+├── static/style.css          # single stylesheet, no framework
+├── data/                     # runtime engagement files (gitignored)
+├── requirements.txt
+├── .env                      # ANTHROPIC_API_KEY (gitignored, you create this)
+├── .gitignore
+├── README.md                 # this file
+├── USER_GUIDE.md             # consultant's manual
+└── techdebtcontext.md        # developer log
+```
