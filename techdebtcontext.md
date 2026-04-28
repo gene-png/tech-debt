@@ -37,7 +37,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `493930c` (2026-04-28) — Backfill feddd7d commit hash in change log.
 - `632e47b` (2026-04-28) — Phase 10: Create Recommendations (8 files changed, +968 lines).
 - `5a8eeb0` (2026-04-28) — Backfill 632e47b commit hash in change log.
-- *(2026-04-28) Phase 11 build pending push.*
+- `9df6df6` (2026-04-28) — Phase 11: Executive Summary — all 11 phases complete (8 files changed, +744 lines).
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
