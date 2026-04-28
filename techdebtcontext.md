@@ -33,7 +33,7 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `df10622` (2026-04-28) — Backfill 8a56e8b commit hash in change log.
 - `6e29025` (2026-04-28) — Phase 8: Estimate Cost Savings (8 files changed, +930 lines).
 - `2553709` (2026-04-28) — Backfill 6e29025 commit hash in change log.
-- *(2026-04-28) Phase 9 build pending push.*
+- `feddd7d` (2026-04-28) — Phase 9: Validate with Stakeholders (8 files changed, +710 lines).
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
