@@ -17,6 +17,14 @@ This file is the running log of decisions, work completed, and open questions fo
 
 The local working copy lives in this worktree under `software_rationalization/`. The GitHub repo at https://github.com/gene-png/tech-debt expects the **same files at the repo root** (no `software_rationalization/` prefix). To push updates, mirror the contents to a working clone and push. A scratch working copy used for the initial push lives at `C:/Users/pow_w/AppData/Local/Temp/tech-debt-push`. For long-term use, clone `tech-debt.git` somewhere permanent and treat that as the canonical pull/push target — the worktree copy here is convenient for iteration but the temp directory is ephemeral.
 
+### Recent pushes
+
+- `f90df8b` (2026-04-27) — Initial commit: Phases 1 & 2 build (16 files).
+- `0eef907` (2026-04-27) — Documented GitHub sync workflow in this context file.
+- `98d0bed` (2026-04-27) — Phase 3: Build the Software Inventory (10 files changed, +1097 lines).
+
+The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
+
 ## Phase status
 
 | # | Phase                          | Status   |
@@ -35,11 +43,11 @@ The local working copy lives in this worktree under `software_rationalization/`.
 
 ## Architecture
 
-- **`app.py`** — Flask routes, form parsing, scope statement generator. `PHASES` constant drives the sidebar; adding a new phase means adding a route + template + an entry in `phase_progress`.
-- **`storage.py`** — JSON file I/O for engagements, plus `new_engagement()` factory that pre-seeds the `phase_progress` and `scope` keys.
-- **`templates/`** — `base.html` is the shared shell, `_sidebar.html` renders the phase nav, individual templates per phase. `scope_statement.html` is print-styled.
-- **`static/style.css`** — single CSS file; no JS framework, no build step.
-- **`data/`** — runtime, gitignored. One JSON file per engagement.
+- **`app.py`** — All Flask routes for live phases (Phase 1 scope, Phase 2 data request + uploads, Phase 3 inventory CRUD / CSV+XLSX import-export), plus form coercion helpers, status-statement / checklist / inventory-export generators, and Jinja filters (`format_bytes`, `money`, `phase_label`, `phase_status_class`). The `PHASES` constant drives the sidebar; adding a new phase means adding a route + template + entry in `phase_progress`.
+- **`storage.py`** — JSON file I/O for engagements (`load_engagement`, `save_engagement`, `list_engagements`), plus the `new_engagement()` factory that pre-seeds `phase_progress` and `scope`. Other phases (`data_request`, `inventory`) are lazily initialized inside `app.py` on first visit so an engagement created before a phase shipped still works.
+- **`templates/`** — `base.html` is the shared shell, `_sidebar.html` renders the phase nav with status dots, and each phase has dedicated templates: `engagement_scope.html` + `scope_statement.html` (Phase 1), `data_request.html` + `data_request_checklist.html` (Phase 2), `inventory_list.html` + `inventory_form.html` + `inventory_import.html` (Phase 3). The two "statement" / "checklist" templates are print-styled and use a separate `.statement` CSS class.
+- **`static/style.css`** — single CSS file, no JS framework, no build step. Sections: base/typography, layout, sidebar, panels, forms, tags, statement (print), Phase 2 data-request, Phase 3 inventory table.
+- **`data/`** — runtime, gitignored. One JSON file per engagement plus `uploads/<engagement_id>/<item_id>/` for Phase 2 file storage.
 
 ## Data model (engagement JSON)
 
@@ -90,7 +98,7 @@ inventory: {                           ← Phase 3
 }
 ```
 
-Future phases will add new top-level keys (e.g. `inventory`, `overlap`, `tech_debt`, `recommendations`) without touching existing fields.
+Future phases will add new top-level keys (e.g. `overlap`, `tech_debt`, `recommendations`) without touching existing fields.
 
 ### File upload storage
 
@@ -142,6 +150,32 @@ Auto-calc behaviour: if `total_annual_cost` is blank but `cost_per_license` and 
 
 Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`. Reopen reverts.
 
+## Routes quick reference
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/` | GET | Engagement list + playbook overview |
+| `/engagements/new` | GET / POST | Create engagement |
+| `/engagements/<id>` | GET | Engagement overview (all phase panels) |
+| `/engagements/<id>/scope` | GET / POST | Phase 1 — scope form (save / finalize / reopen) |
+| `/engagements/<id>/scope/statement` | GET | Phase 1 deliverable (printable HTML) |
+| `/engagements/<id>/scope/statement.txt` | GET | Phase 1 deliverable (.txt download) |
+| `/engagements/<id>/data-request` | GET / POST | Phase 2 — checklist + per-item status / message / finalize |
+| `/engagements/<id>/data-request/items/<iid>/upload` | POST | Phase 2 — file upload (multipart) |
+| `/engagements/<id>/data-request/items/<iid>/files/<fid>` | GET | Phase 2 — file download |
+| `/engagements/<id>/data-request/items/<iid>/files/<fid>/delete` | POST | Phase 2 — file delete |
+| `/engagements/<id>/data-request/checklist` | GET | Phase 2 deliverable (printable HTML) |
+| `/engagements/<id>/data-request/checklist.txt` | GET | Phase 2 deliverable (.txt download) |
+| `/engagements/<id>/inventory` | GET | Phase 3 — list (`?q=&category=&sort=&dir=`) |
+| `/engagements/<id>/inventory/new` | GET / POST | Phase 3 — add product |
+| `/engagements/<id>/inventory/<pid>/edit` | GET / POST | Phase 3 — edit product |
+| `/engagements/<id>/inventory/<pid>/delete` | POST | Phase 3 — delete product |
+| `/engagements/<id>/inventory/import` | GET / POST | Phase 3 — CSV / XLSX import |
+| `/engagements/<id>/inventory/finalize` | POST | Phase 3 — finalize / reopen |
+| `/engagements/<id>/inventory/export.csv` | GET | Phase 3 deliverable (CSV) |
+| `/engagements/<id>/inventory/export.xlsx` | GET | Phase 3 deliverable (formatted XLSX) |
+| `/engagements/<id>/inventory/template.csv` | GET | Empty CSV template (canonical headers) |
+
 ## Decisions made
 
 - **Standalone app** under `software_rationalization/`, separate from the parent TSMA Flask app — keeps concerns clean and avoids touching existing TSMA storage/templates.
@@ -149,17 +183,23 @@ Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`
 - **Owner records** entered as `Name | Role | email` per line — keeps the form simple while still producing structured records.
 - **Phase progress** stored as a per-key dict rather than a single status field — lets phases be reopened independently.
 - **No auth yet** — single-user local workbench. Add auth before deploying anywhere shared.
+- **GitHub repo flattened** — the dashboard sits at the root of `tech-debt.git`, not under `software_rationalization/`. Rationale: a fresh clone should be runnable with `pip install && python app.py`; nesting it would force every user to `cd` first.
+- **Phase 2 uploads stored on disk, metadata in JSON** — keeps the JSON file small and lets the user open the original files directly. Filenames are stored as `<file_id>_<safe_filename>` to avoid collisions while preserving the human name on download.
+- **Auto status transitions in Phase 2** — first upload → "Received", deleting last file → "Requested". Cuts manual clicks for the common case while still letting the consultant override.
+- **Fuzzy CSV header matching for Phase 3 import** — customers ship spreadsheets in inconsistent formats. `PRODUCT_FIELD_ALIASES` lets headers like "Annual Cost", "yearly cost", or "annual_cost" all map to the same field. Strict matching would force re-formatting before every import.
+- **Auto-calc `total_annual_cost`** — if blank but `cost_per_license × licenses_purchased` are present, the total is filled. Manual entries always take precedence.
+- **openpyxl for XLSX I/O** — already a dependency of the parent TSMA app; reusing it keeps deps minimal. CSV is preferred for round-tripping (no XLSX read on import would block customers; we support both).
+- **Finalize-then-pre-mark-next** — finalizing a phase advances the engagement `status` AND pre-marks the next phase as `in_progress`. Gives the next phase visible momentum in the sidebar instead of looking idle.
 
-## Verified working (this session)
+## Verified working
 
-- App boots on port 5055 (Flask dev server, debug mode on).
-- Routes returning 200/302 in real browser session (server log confirms):
-  - `GET /` (home)
-  - `GET /engagements/new`
-  - `POST /engagements/new` → 302 redirect
-  - `GET /engagements/<id>` (overview)
-  - `GET /engagements/<id>/scope` (Phase 1 form)
-- Flask test-client smoke test exercised the full Phase 1 flow including finalize, HTML statement, and `.txt` download.
+Each live phase has a complete end-to-end smoke test (Flask test client) plus live-server confirmation. Specifics live in the per-phase change-log entries below; high-level current state:
+
+- App boots on port 5055 (Flask dev server, debug + autoreloader on). All static assets served.
+- **Phase 1** — engagement create, scope edit, save draft, finalize, reopen, scope statement HTML + `.txt` download.
+- **Phase 2** — auto-init checklist on first visit, status updates, customer-message save, multi-file upload (verified bytes round-trip via download), checklist HTML + `.txt`, file delete with auto status revert, finalize / reopen with status transitions.
+- **Phase 3** — inventory CRUD (auto-calc total verified), CSV import with fuzzy header matching (rows missing product name skipped and counted), XLSX import, list page with search + category filter + per-column sort, CSV export with all 22 columns, formatted XLSX export (verified valid ZIP container), blank CSV template, finalize / reopen advancing engagement to Phase 4.
+- Live server traffic confirmed for `/`, `/engagements/<id>`, `/engagements/<id>/scope`, `/engagements/<id>/data-request`, `/engagements/<id>/inventory` and their sub-routes (200 / 302 in access log after Flask reloader picks up edits).
 
 ## Open questions / next decisions
 
@@ -214,3 +254,8 @@ Finalize advances `status` to `normalize` and pre-marks Phase 4 as `in_progress`
 - Updated `_sidebar.html` to make Phase 3 clickable; updated `engagement_view.html` to surface a Phase 3 panel and offer the XLSX export from there; updated `home.html` to mark Phase 3 as Live.
 - New CSS: `.inventory-table` (sticky header, numeric column alignment), `.sort-link`, `.inventory-scroll`, `.category-rollup`. New `money` Jinja filter.
 - Smoke test (Flask test client): create engagement → add product (auto-calc 12.50×500=6250 verified) → edit (override total) → CSV import (4 rows added, 1 missing-name row skipped) → list, search, category filter, sort all return 200 → CSV export (header row matches PRODUCT_FIELDS) → XLSX export (verified ZIP container is valid) → blank template → delete → finalize (advances to Phase 4 `in_progress`) → reopen → engagement view renders Phase 3 panel. All checks pass. Live server confirmed Phase 3 routes return 200 after the Flask reloader picked up changes. (Caught and fixed one Jinja syntax error: nested-escape backslashes in a JS confirm dialog were rejected by the parser; simplified the confirm message.)
+
+### 2026-04-27 — Context file refresh
+
+- Refreshed `techdebtcontext.md` to reflect the post-Phase-3 state. Architecture section now describes all live-phase code paths (was Phase-1 only). "Verified working" section replaced the stale Phase-1-only list with a per-phase summary plus pointer to the change-log entries below. Added a "Recent pushes" subsection under GitHub sync workflow. Added a "Routes quick reference" table covering all live endpoints. Captured the design decisions made during Phase 2 and Phase 3 (file storage on disk, auto status transitions, fuzzy CSV matching, auto-calc total, openpyxl reuse, finalize-then-pre-mark-next).
+- Removed a slightly inaccurate sentence: data model said "future phases will add new top-level keys (e.g. `inventory`, …)" — `inventory` is no longer hypothetical.
