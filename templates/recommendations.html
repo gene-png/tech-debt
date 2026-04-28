@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}Recommendations · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="layout">
+  {% with current_phase = 'recommendations' %}{% include "_sidebar.html" %}{% endwith %}
+  <div class="main">
+    <div class="panel">
+      <h1>Phase 10 — Create Recommendations</h1>
+      <p class="lead">Synthesize Phases 5, 7, 8, and 9 into structured recommendations leadership can act on. Most fields auto-fill from prior phases; level-of-effort, risk, timeline, and decision owner are manual judgement calls.</p>
+
+      {% set ree = eng.recommendations %}
+      {% if ree.finalized %}
+        <div class="notice">Phase 10 finalized on {{ ree.finalized_at[:10] }}.</div>
+      {% endif %}
+      {% if request.args.get('seeded') %}
+        <div class="notice">Seeded {{ request.args.get('seeded') }} new recommendation{{ 's' if request.args.get('seeded') != '1' else '' }} from Phase 8 opportunities.</div>
+      {% endif %}
+
+      <div class="dr-summary">
+        <div class="summary-tile"><div class="num">{{ summary.count }}</div><div class="lbl">Recommendations</div></div>
+        <div class="summary-tile good"><div class="num">{{ summary.by_status.accepted }}</div><div class="lbl">Accepted</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.by_status.draft }}</div><div class="lbl">Draft</div></div>
+        <div class="summary-tile muted"><div class="num">{{ summary.by_status.deferred }}</div><div class="lbl">Deferred</div></div>
+        <div class="summary-tile danger"><div class="num">{{ summary.by_risk.high }}</div><div class="lbl">High risk</div></div>
+        <div class="summary-tile"><div class="num">{{ summary.by_loe.high }}</div><div class="lbl">High effort</div></div>
+      </div>
+
+      <div class="actions">
+        <form method="post" action="{{ url_for('engagement_recommendations_seed', engagement_id=eng.id) }}" class="inline-form">
+          <button class="btn" type="submit" {% if opp_count == 0 %}disabled{% endif %}>Seed from Phase 8 ({{ opp_count }} opportunit{{ 'y' if opp_count == 1 else 'ies' }})</button>
+        </form>
+        <a class="btn secondary" href="#new-recommendation">+ Add custom recommendation</a>
+        <a class="btn secondary" href="{{ url_for('engagement_recommendations_report', engagement_id=eng.id) }}">View report</a>
+        <a class="btn secondary" href="{{ url_for('engagement_recommendations_report_csv', engagement_id=eng.id) }}">Download .csv</a>
+      </div>
+
+      <p class="helper" style="margin-top: 12px;">
+        <strong>By category:</strong>
+        {% for k, l in categories %}
+          {% if summary.by_category.get(k) %}<span class="tag cat">{{ l }} · {{ summary.by_category[k] }}</span>{% endif %}
+        {% endfor %}
+        {% if summary.count == 0 %}none yet.{% endif %}
+      </p>
+    </div>
+
+    {% if not recommendations %}
+      <div class="panel">
+        <div class="empty">
+          {% if opp_count == 0 %}
+            No Phase 8 opportunities exist yet. <a href="{{ url_for('engagement_savings', engagement_id=eng.id) }}">Build savings opportunities</a> first, then seed recommendations from them.
+          {% else %}
+            Click <strong>Seed from Phase 8</strong> to auto-create recommendations, or add a custom one below.
+          {% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    {% set last_cat = namespace(value="") %}
+    {% for r in recommendations %}
+      {% if r.category != last_cat.value %}
+        <h2 class="rec-category-header">{{ r.category_label or 'Uncategorized' }}</h2>
+        {% set last_cat.value = r.category %}
+      {% endif %}
+      <div class="panel rec-card rec-{{ r.status }}" id="rec-{{ r.id }}">
+        <form method="post" action="{{ url_for('engagement_recommendations_edit', engagement_id=eng.id, rec_id=r.id) }}">
+          <div class="rec-header">
+            <input type="text" name="finding" value="{{ r.finding }}" class="opp-title-input" style="font-size: 16px;">
+            <span class="status-pill status-{% if r.status == 'accepted' %}received{% elif r.status == 'draft' %}requested{% else %}not_applicable{% endif %}">{{ r.status | upper }}</span>
+          </div>
+          {% if r.products %}
+            <div class="meta" style="margin: 4px 0 12px;">
+              {% for p in r.products %}<a href="{{ url_for('engagement_inventory_edit', engagement_id=eng.id, product_id=p.id) }}" class="tag cat">{{ p.product_name }}</a>{% endfor %}
+              {% if r.source_opp_id %} · seeded from Phase 8{% endif %}
+            </div>
+          {% endif %}
+
+          <div class="row">
+            <div class="col" style="flex: 0 0 200px;">
+              <label>Category</label>
+              <select name="category">
+                {% for k, l in categories %}
+                  <option value="{{ k }}" {% if r.category == k %}selected{% endif %}>{{ l }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col" style="flex: 0 0 160px;">
+              <label>Status</label>
+              <select name="status">
+                {% for k, l in statuses %}
+                  <option value="{{ k }}" {% if r.status == k %}selected{% endif %}>{{ l }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col" style="flex: 0 0 160px;">
+              <label>Level of effort</label>
+              <select name="level_of_effort">
+                <option value="">—</option>
+                {% for k, l in loe_levels %}
+                  <option value="{{ k }}" {% if r.level_of_effort == k %}selected{% endif %}>{{ l }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col" style="flex: 0 0 160px;">
+              <label>Risk level</label>
+              <select name="risk_level">
+                <option value="">—</option>
+                {% for k, l in risk_levels %}
+                  <option value="{{ k }}" {% if r.risk_level == k %}selected{% endif %}>{{ l }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="rec-grid">
+            <div class="field">
+              <label>Business impact</label>
+              <textarea name="business_impact" rows="2">{{ r.business_impact }}</textarea>
+            </div>
+            <div class="field">
+              <label>Technical-debt impact</label>
+              <textarea name="tech_debt_impact" rows="2">{{ r.tech_debt_impact }}</textarea>
+            </div>
+            <div class="field">
+              <label>Security impact</label>
+              <textarea name="security_impact" rows="2">{{ r.security_impact }}</textarea>
+            </div>
+            <div class="field">
+              <label>Cost impact</label>
+              <textarea name="cost_impact" rows="2">{{ r.cost_impact }}</textarea>
+            </div>
+            <div class="field" style="grid-column: 1 / -1;">
+              <label>Recommended action</label>
+              <textarea name="recommended_action" rows="2">{{ r.recommended_action }}</textarea>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top: 8px;">
+            <div class="col">
+              <label>Proposed timeline</label>
+              <input type="text" name="timeline" value="{{ r.timeline or '' }}" placeholder="e.g. Q3 2026, before next renewal">
+            </div>
+            <div class="col">
+              <label>Decision owner</label>
+              <input type="text" name="decision_owner" value="{{ r.decision_owner or '' }}" placeholder="who signs off">
+            </div>
+          </div>
+          <div class="field">
+            <label>Notes</label>
+            <textarea name="notes" rows="2">{{ r.notes }}</textarea>
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="submit">Save</button>
+          </div>
+        </form>
+
+        <div class="opp-quick-actions">
+          <form method="post" action="{{ url_for('engagement_recommendations_status', engagement_id=eng.id, rec_id=r.id) }}" class="inline-form">
+            <input type="hidden" name="status" value="accepted">
+            <button class="btn-link" type="submit">accept</button>
+          </form>
+          <form method="post" action="{{ url_for('engagement_recommendations_status', engagement_id=eng.id, rec_id=r.id) }}" class="inline-form">
+            <input type="hidden" name="status" value="draft">
+            <button class="btn-link" type="submit">return to draft</button>
+          </form>
+          <form method="post" action="{{ url_for('engagement_recommendations_status', engagement_id=eng.id, rec_id=r.id) }}" class="inline-form">
+            <input type="hidden" name="status" value="deferred">
+            <button class="btn-link" type="submit">defer</button>
+          </form>
+          <form method="post" action="{{ url_for('engagement_recommendations_delete', engagement_id=eng.id, rec_id=r.id) }}" class="inline-form" onsubmit="return confirm('Delete this recommendation?');">
+            <button class="btn-link danger" type="submit">delete</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+
+    <div class="panel" id="new-recommendation">
+      <h2>Add custom recommendation</h2>
+      <form method="post" action="{{ url_for('engagement_recommendations_new', engagement_id=eng.id) }}">
+        <div class="row">
+          <div class="col">
+            <label>Finding</label>
+            <input type="text" name="finding" placeholder="e.g. Establish SaaS purchase governance" required>
+          </div>
+          <div class="col" style="flex: 0 0 240px;">
+            <label>Category</label>
+            <select name="category">
+              {% for k, l in categories %}
+                <option value="{{ k }}">{{ l }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Affected products (optional)</label>
+          <p class="helper">Hold Ctrl / Cmd to select multiple. Leave empty if the recommendation isn't tied to specific products.</p>
+          <select name="product_ids" multiple size="6" style="height: auto;">
+            {% for p in products %}
+              <option value="{{ p.id }}">{{ p.product_name }}{% if p.vendor %} · {{ p.vendor }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Add recommendation</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Finalize Phase 10</h2>
+      <p class="helper">Lock the recommendation report once leadership has signed off. Phase 11 (Executive Summary) activates next.</p>
+      <form method="post" action="{{ url_for('engagement_recommendations_finalize', engagement_id=eng.id) }}">
+        {% if ree.finalized %}
+          <input type="hidden" name="action" value="reopen">
+          <button class="btn secondary" type="submit">Reopen Phase 10</button>
+        {% else %}
+          <input type="hidden" name="action" value="finalize">
+          <button class="btn" type="submit" style="background: var(--good); border-color: var(--good);">Finalize Phase 10</button>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Recommendation report · {{ eng.name }}{% endblock %}
+{% block body %}
+<div class="print-actions">
+  <a class="btn secondary" href="{{ url_for('engagement_recommendations', engagement_id=eng.id) }}">← Back</a>
+  <a class="btn secondary" href="{{ url_for('engagement_recommendations_report_csv', engagement_id=eng.id) }}">Download .csv</a>
+  <button class="btn" type="button" onclick="window.print()">Print</button>
+</div>
+<article class="statement">
+  <h1>Software Rationalization Recommendation Report</h1>
+  <div class="meta-line">
+    <strong>{{ eng.name }}</strong> — {{ eng.client }}
+    {% if eng.lead %} · Lead: {{ eng.lead }}{% endif %}<br>
+    Generated {{ eng.updated_at[:10] }}{% if eng.recommendations.finalized_at %} · Finalized {{ eng.recommendations.finalized_at[:10] }}{% endif %}
+  </div>
+
+  <h2>Summary</h2>
+  <table class="checklist-table">
+    <tbody>
+      <tr><td>Total recommendations</td><td><strong>{{ summary.count }}</strong></td></tr>
+      <tr><td>By status</td><td><strong>{{ summary.by_status.accepted }} accepted · {{ summary.by_status.draft }} draft · {{ summary.by_status.deferred }} deferred</strong></td></tr>
+      <tr><td>Risk profile</td><td><strong>{{ summary.by_risk.high }} high · {{ summary.by_risk.medium }} medium · {{ summary.by_risk.low }} low · {{ summary.by_risk.unset }} unset</strong></td></tr>
+      <tr><td>Effort profile</td><td><strong>{{ summary.by_loe.high }} high · {{ summary.by_loe.medium }} medium · {{ summary.by_loe.low }} low · {{ summary.by_loe.unset }} unset</strong></td></tr>
+    </tbody>
+  </table>
+
+  {% if not sections %}
+    <h2>No recommendations recorded</h2>
+    <p>Seed recommendations from Phase 8 opportunities or add custom ones in the workspace before publishing.</p>
+  {% endif %}
+
+  {% for sec in sections %}
+    <h2>{{ sec.category_label }}</h2>
+    {% for r in sec.recs %}
+      <div class="rec-report-item">
+        <div class="rec-report-head">
+          <strong>{{ r.finding }}</strong>
+          <span class="status-pill status-{% if r.status == 'accepted' %}received{% elif r.status == 'draft' %}requested{% else %}not_applicable{% endif %}">{{ status_label.get(r.status, r.status) | upper }}</span>
+        </div>
+        {% if r.product_names %}
+          <div class="meta-line">Affected products: {{ r.product_names | join(', ') }}</div>
+        {% endif %}
+        <dl class="kv" style="grid-template-columns: 180px 1fr; margin-top: 10px;">
+          {% if r.business_impact %}<dt>Business impact</dt><dd>{{ r.business_impact }}</dd>{% endif %}
+          {% if r.tech_debt_impact %}<dt>Technical-debt impact</dt><dd>{{ r.tech_debt_impact }}</dd>{% endif %}
+          {% if r.security_impact %}<dt>Security impact</dt><dd>{{ r.security_impact }}</dd>{% endif %}
+          {% if r.cost_impact %}<dt>Cost impact</dt><dd>{{ r.cost_impact }}</dd>{% endif %}
+          {% if r.recommended_action %}<dt>Recommended action</dt><dd>{{ r.recommended_action }}</dd>{% endif %}
+          {% if r.level_of_effort %}<dt>Level of effort</dt><dd>{{ loe_label.get(r.level_of_effort, r.level_of_effort) }}</dd>{% endif %}
+          {% if r.risk_level %}<dt>Risk level</dt><dd>{{ risk_label.get(r.risk_level, r.risk_level) }}</dd>{% endif %}
+          {% if r.timeline %}<dt>Proposed timeline</dt><dd>{{ r.timeline }}</dd>{% endif %}
+          {% if r.decision_owner %}<dt>Decision owner</dt><dd>{{ r.decision_owner }}</dd>{% endif %}
+          {% if r.notes %}<dt>Notes</dt><dd>{{ r.notes }}</dd>{% endif %}
+        </dl>
+      </div>
+    {% endfor %}
+  {% endfor %}
+
+  <h2>Recommendation categories reference</h2>
+  <ul>
+    <li><strong>Immediate savings</strong> — actions that recover spend within the current contract cycle.</li>
+    <li><strong>Renewal negotiation</strong> — keep the product but renegotiate price, term, or seat count at renewal.</li>
+    <li><strong>License reduction</strong> — right-size the seat count to match active users.</li>
+    <li><strong>Product consolidation</strong> — merge usage from multiple overlapping products onto one platform.</li>
+    <li><strong>Product retirement</strong> — remove the product from the estate without replacement.</li>
+    <li><strong>Security risk reduction</strong> — address weak controls, exposure, or data-handling concerns.</li>
+    <li><strong>Governance improvement</strong> — process changes (purchase review, ownership) that prevent future debt.</li>
+    <li><strong>Further analysis required</strong> — undecided pending more information or stakeholder input.</li>
+  </ul>
+</article>
+{% endblock %}

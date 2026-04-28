@@ -165,6 +165,38 @@ VALIDATION_OVERALL_STATUSES = [
     ("blocked", "Blocked"),
 ]
 
+# Phase 10 — Recommendations --------------------------------------------------
+
+RECOMMENDATION_CATEGORIES = [
+    ("immediate_savings", "Immediate savings"),
+    ("renewal_negotiation", "Renewal negotiation"),
+    ("license_reduction", "License reduction"),
+    ("consolidation", "Product consolidation"),
+    ("retirement", "Product retirement"),
+    ("security_risk_reduction", "Security risk reduction"),
+    ("governance_improvement", "Governance improvement"),
+    ("further_analysis", "Further analysis required"),
+]
+
+# Map a Phase 8 opportunity disposition to a recommendation category.
+DISPOSITION_TO_CATEGORY = {
+    "retire": "retirement",
+    "replace": "consolidation",
+    "consolidate": "consolidation",
+    "renegotiate": "renewal_negotiation",
+    "reduce_licenses": "license_reduction",
+    "other": "further_analysis",
+}
+
+LOE_LEVELS = [("low", "Low"), ("medium", "Medium"), ("high", "High")]
+RISK_LEVELS = [("low", "Low"), ("medium", "Medium"), ("high", "High")]
+
+RECOMMENDATION_STATUSES = [
+    ("draft", "Draft"),
+    ("accepted", "Accepted"),
+    ("deferred", "Deferred"),
+]
+
 # Phase 3 — Build Inventory ---------------------------------------------------
 
 PRODUCT_CATEGORIES = [
@@ -1835,6 +1867,474 @@ def engagement_overlap_analysis_csv(engagement_id):
                 d.get("notes", ""),
             ])
     fn = f"product-overlap-analysis-{eng.get('id')}.csv"
+    return Response(
+        sio.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Recommendations
+# ---------------------------------------------------------------------------
+
+def _ensure_recommendations(eng):
+    if "recommendations" in eng and "recs" in eng["recommendations"]:
+        return False
+    eng["recommendations"] = {
+        "recs": {},
+        "finalized": False,
+        "finalized_at": None,
+    }
+    return True
+
+
+def _new_recommendation(*, finding, source_opp_id="", seed_key="", product_ids=None,
+                        business_impact="", tech_debt_impact="", security_impact="",
+                        cost_impact="", recommended_action="", category="further_analysis",
+                        level_of_effort="", risk_level="", timeline="",
+                        decision_owner="", notes="", status="draft"):
+    rid = uuid.uuid4().hex[:8]
+    now = datetime.utcnow().isoformat() + "Z"
+    return {
+        "id": rid,
+        "source_opp_id": source_opp_id,
+        "seed_key": seed_key,
+        "finding": finding,
+        "product_ids": list(product_ids or []),
+        "business_impact": business_impact,
+        "tech_debt_impact": tech_debt_impact,
+        "security_impact": security_impact,
+        "cost_impact": cost_impact,
+        "recommended_action": recommended_action,
+        "category": category,
+        "level_of_effort": level_of_effort,
+        "risk_level": risk_level,
+        "timeline": timeline,
+        "decision_owner": decision_owner,
+        "notes": notes,
+        "status": status,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _format_money_str(v):
+    try:
+        return f"${float(v):,.0f}"
+    except (TypeError, ValueError):
+        return str(v) if v else ""
+
+
+def _seed_recommendations(eng):
+    """One recommendation per Phase 8 opportunity (idempotent via seed_key)."""
+    _ensure_recommendations(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    tech_debt_flags = eng.get("tech_debt", {}).get("flags", {})
+    flag_labels = {k: l for k, l, _h in TECH_DEBT_FLAGS}
+    val_records = eng.get("validation", {}).get("validations", {})
+    opps = eng.get("savings", {}).get("opportunities", {})
+
+    existing_seeds = {
+        r.get("seed_key") for r in eng["recommendations"]["recs"].values()
+        if r.get("seed_key")
+    }
+    created = 0
+    for opp_id, opp in opps.items():
+        seed_key = f"phase8:{opp_id}"
+        if seed_key in existing_seeds:
+            continue
+
+        # Auto-fill from related data.
+        opp_products = [products_by_id[pid] for pid in opp.get("product_ids", []) if pid in products_by_id]
+
+        # Business impact: validation.business_process > validation.what_breaks > primary_use_case
+        rec = val_records.get(opp_id) or {}
+        ans = rec.get("answers", {})
+        business_bits = []
+        if ans.get("business_process"):
+            business_bits.append(ans["business_process"])
+        if ans.get("what_breaks"):
+            business_bits.append(f"If removed: {ans['what_breaks']}")
+        if not business_bits:
+            uses = [p.get("primary_use_case") for p in opp_products if p.get("primary_use_case")]
+            if uses:
+                business_bits.append("Primary use: " + "; ".join(uses))
+        business_impact = " — ".join(business_bits)
+
+        # Tech-debt impact: distinct flag labels across affected products
+        td_bits = []
+        for p in opp_products:
+            frec = tech_debt_flags.get(p["id"]) or {}
+            for fk in frec.get("flags", []):
+                lbl = flag_labels.get(fk, fk)
+                if lbl not in td_bits:
+                    td_bits.append(lbl)
+        tech_debt_impact = ", ".join(td_bits) if td_bits else "None recorded in Phase 7"
+
+        # Security impact: weak_security flag + data_sensitivity levels
+        sec_bits = []
+        weak_security_present = any(
+            "weak_security" in (tech_debt_flags.get(p["id"], {}).get("flags") or [])
+            for p in opp_products
+        )
+        if weak_security_present:
+            sec_bits.append("Weak security controls flagged")
+        sens_levels = sorted({(p.get("data_sensitivity") or "").strip()
+                              for p in opp_products
+                              if (p.get("data_sensitivity") or "").strip()})
+        if sens_levels:
+            sec_bits.append(f"Data sensitivity: {', '.join(sens_levels)}")
+        security_impact = "; ".join(sec_bits) if sec_bits else "No specific security concern flagged"
+
+        # Cost impact: from opportunity totals
+        totals = _opportunity_totals(opp)
+        cost_bits = [f"{_format_money_str(totals['recurring'])}/yr recurring savings"]
+        if totals["first_year"] != totals["recurring"]:
+            cost_bits.append(f"{_format_money_str(totals['first_year'])} net first-year")
+        if totals["transition_total"]:
+            cost_bits.append(f"{_format_money_str(totals['transition_total'])} transition cost")
+        cost_impact = " · ".join(cost_bits)
+
+        # Recommended action: derived from disposition
+        action_map = {
+            "retire": "Retire and reclaim spend.",
+            "replace": "Replace with the consolidation target.",
+            "consolidate": "Consolidate usage onto the chosen platform.",
+            "renegotiate": "Renegotiate contract terms ahead of renewal.",
+            "reduce_licenses": "Right-size license count to active users.",
+            "other": "Further analysis required to determine action.",
+        }
+        recommended_action = action_map.get(opp.get("disposition"), "Further analysis required.")
+        if rec.get("notes"):
+            recommended_action += f" Stakeholder note: {rec['notes']}"
+
+        category = DISPOSITION_TO_CATEGORY.get(opp.get("disposition"), "further_analysis")
+
+        # Notes carry through opportunity + validation freeform notes
+        notes_bits = []
+        if opp.get("notes"):
+            notes_bits.append(f"Phase 8: {opp['notes']}")
+        if rec.get("notes"):
+            notes_bits.append(f"Phase 9: {rec['notes']}")
+        notes = " | ".join(notes_bits)
+
+        new_rec = _new_recommendation(
+            finding=opp.get("title", "Untitled finding"),
+            source_opp_id=opp_id,
+            seed_key=seed_key,
+            product_ids=opp.get("product_ids", []),
+            business_impact=business_impact,
+            tech_debt_impact=tech_debt_impact,
+            security_impact=security_impact,
+            cost_impact=cost_impact,
+            recommended_action=recommended_action,
+            category=category,
+            notes=notes,
+            status="accepted" if opp.get("status") == "approved" else "draft",
+        )
+        eng["recommendations"]["recs"][new_rec["id"]] = new_rec
+        existing_seeds.add(seed_key)
+        created += 1
+    return created
+
+
+def _recommendations_summary(eng):
+    recs = eng.get("recommendations", {}).get("recs", {}).values()
+    by_status = {"draft": 0, "accepted": 0, "deferred": 0}
+    by_category = {k: 0 for k, _l in RECOMMENDATION_CATEGORIES}
+    by_risk = {"low": 0, "medium": 0, "high": 0, "unset": 0}
+    by_loe = {"low": 0, "medium": 0, "high": 0, "unset": 0}
+    for r in recs:
+        st = r.get("status", "draft")
+        if st in by_status:
+            by_status[st] += 1
+        cat = r.get("category", "")
+        if cat in by_category:
+            by_category[cat] += 1
+        rl = r.get("risk_level", "") or "unset"
+        if rl in by_risk:
+            by_risk[rl] += 1
+        loe = r.get("level_of_effort", "") or "unset"
+        if loe in by_loe:
+            by_loe[loe] += 1
+    return {
+        "count": len(eng.get("recommendations", {}).get("recs", {})),
+        "by_status": by_status,
+        "by_category": by_category,
+        "by_risk": by_risk,
+        "by_loe": by_loe,
+    }
+
+
+@app.route("/engagements/<engagement_id>/recommendations", methods=["GET"])
+def engagement_recommendations(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    if _ensure_recommendations(eng):
+        if (eng["phase_progress"].get("validation") == "complete"
+                and eng["phase_progress"].get("recommendations") == "not_started"):
+            eng["phase_progress"]["recommendations"] = "in_progress"
+        storage.save_engagement(eng)
+
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    cat_label = {k: l for k, l in RECOMMENDATION_CATEGORIES}
+    cat_order = {k: i for i, (k, _l) in enumerate(RECOMMENDATION_CATEGORIES)}
+    status_order = {"accepted": 0, "draft": 1, "deferred": 2}
+
+    recs_sorted = sorted(
+        eng["recommendations"]["recs"].values(),
+        key=lambda r: (
+            cat_order.get(r.get("category", ""), 99),
+            status_order.get(r.get("status", "draft"), 3),
+            r.get("finding", ""),
+        ),
+    )
+    annotated = []
+    for r in recs_sorted:
+        details = []
+        for pid in r.get("product_ids", []):
+            p = products_by_id.get(pid)
+            if p:
+                details.append({
+                    "id": pid,
+                    "product_name": p.get("product_name", ""),
+                    "vendor": p.get("vendor", ""),
+                })
+        annotated.append({**r, "products": details, "category_label": cat_label.get(r.get("category", ""), "")})
+
+    summary = _recommendations_summary(eng)
+    return render_template(
+        "recommendations.html",
+        eng=eng,
+        recommendations=annotated,
+        products=products,
+        summary=summary,
+        categories=RECOMMENDATION_CATEGORIES,
+        statuses=RECOMMENDATION_STATUSES,
+        loe_levels=LOE_LEVELS,
+        risk_levels=RISK_LEVELS,
+        cat_label=cat_label,
+        opp_count=len(eng.get("savings", {}).get("opportunities", {})),
+        phases=PHASES,
+    )
+
+
+@app.route("/engagements/<engagement_id>/recommendations/seed", methods=["POST"])
+def engagement_recommendations_seed(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    created = _seed_recommendations(eng)
+    if eng["phase_progress"].get("recommendations") == "not_started":
+        eng["phase_progress"]["recommendations"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id) + f"?seeded={created}")
+
+
+@app.route("/engagements/<engagement_id>/recommendations/new", methods=["POST"])
+def engagement_recommendations_new(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    finding = request.form.get("finding", "").strip() or "Untitled recommendation"
+    category = request.form.get("category", "further_analysis").strip()
+    valid_cats = {k for k, _l in RECOMMENDATION_CATEGORIES}
+    if category not in valid_cats:
+        category = "further_analysis"
+    product_ids = request.form.getlist("product_ids")
+    rec = _new_recommendation(
+        finding=finding,
+        product_ids=product_ids,
+        category=category,
+    )
+    eng["recommendations"]["recs"][rec["id"]] = rec
+    if eng["phase_progress"].get("recommendations") == "not_started":
+        eng["phase_progress"]["recommendations"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id) + f"#rec-{rec['id']}")
+
+
+@app.route("/engagements/<engagement_id>/recommendations/<rec_id>/edit", methods=["POST"])
+def engagement_recommendations_edit(engagement_id, rec_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    r = eng["recommendations"]["recs"].get(rec_id)
+    if not r:
+        abort(404)
+
+    valid_cats = {k for k, _l in RECOMMENDATION_CATEGORIES}
+    valid_statuses = {k for k, _l in RECOMMENDATION_STATUSES}
+    valid_loe = {k for k, _l in LOE_LEVELS}
+    valid_risk = {k for k, _l in RISK_LEVELS}
+
+    finding = request.form.get("finding", "").strip()
+    if finding:
+        r["finding"] = finding
+    cat = request.form.get("category", "").strip()
+    if cat in valid_cats:
+        r["category"] = cat
+    status = request.form.get("status", "").strip()
+    if status in valid_statuses:
+        r["status"] = status
+    loe = request.form.get("level_of_effort", "").strip()
+    r["level_of_effort"] = loe if loe in valid_loe else ""
+    risk = request.form.get("risk_level", "").strip()
+    r["risk_level"] = risk if risk in valid_risk else ""
+
+    for fld in ("business_impact", "tech_debt_impact", "security_impact",
+                "cost_impact", "recommended_action", "timeline",
+                "decision_owner", "notes"):
+        r[fld] = request.form.get(fld, "").strip()
+    r["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id) + f"#rec-{rec_id}")
+
+
+@app.route("/engagements/<engagement_id>/recommendations/<rec_id>/status", methods=["POST"])
+def engagement_recommendations_status(engagement_id, rec_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    r = eng["recommendations"]["recs"].get(rec_id)
+    if not r:
+        abort(404)
+    status = request.form.get("status", "").strip()
+    valid = {k for k, _l in RECOMMENDATION_STATUSES}
+    if status in valid:
+        r["status"] = status
+        r["updated_at"] = datetime.utcnow().isoformat() + "Z"
+        storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id) + f"#rec-{rec_id}")
+
+
+@app.route("/engagements/<engagement_id>/recommendations/<rec_id>/delete", methods=["POST"])
+def engagement_recommendations_delete(engagement_id, rec_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    eng["recommendations"]["recs"].pop(rec_id, None)
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/recommendations/finalize", methods=["POST"])
+def engagement_recommendations_finalize(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    action = request.form.get("action", "finalize")
+    if action == "reopen":
+        eng["recommendations"]["finalized"] = False
+        eng["recommendations"]["finalized_at"] = None
+        eng["phase_progress"]["recommendations"] = "in_progress"
+        eng["status"] = "recommendations"
+    else:
+        eng["recommendations"]["finalized"] = True
+        eng["recommendations"]["finalized_at"] = datetime.utcnow().isoformat() + "Z"
+        eng["phase_progress"]["recommendations"] = "complete"
+        eng["status"] = "exec_summary"
+        if eng["phase_progress"].get("exec_summary") == "not_started":
+            eng["phase_progress"]["exec_summary"] = "in_progress"
+    storage.save_engagement(eng)
+    return redirect(url_for("engagement_recommendations", engagement_id=engagement_id))
+
+
+@app.route("/engagements/<engagement_id>/recommendations/report")
+def engagement_recommendations_report(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    products = eng.get("inventory", {}).get("products", [])
+    products_by_id = {p["id"]: p for p in products}
+    cat_label = {k: l for k, l in RECOMMENDATION_CATEGORIES}
+    cat_order = {k: i for i, (k, _l) in enumerate(RECOMMENDATION_CATEGORIES)}
+    status_order = {"accepted": 0, "draft": 1, "deferred": 2}
+
+    grouped = {}
+    for r in eng["recommendations"]["recs"].values():
+        cat = r.get("category", "further_analysis")
+        grouped.setdefault(cat, []).append(r)
+    sections = []
+    for cat in sorted(grouped.keys(), key=lambda c: cat_order.get(c, 99)):
+        items = sorted(grouped[cat], key=lambda r: (status_order.get(r.get("status", "draft"), 3),
+                                                     r.get("finding", "")))
+        annotated = []
+        for r in items:
+            names = [products_by_id.get(pid, {}).get("product_name", "")
+                     for pid in r.get("product_ids", []) if pid in products_by_id]
+            annotated.append({**r, "product_names": names})
+        sections.append({"category_key": cat, "category_label": cat_label.get(cat, cat),
+                         "recs": annotated})
+
+    summary = _recommendations_summary(eng)
+    return render_template(
+        "recommendations_report.html",
+        eng=eng, sections=sections, summary=summary,
+        loe_label={k: l for k, l in LOE_LEVELS},
+        risk_label={k: l for k, l in RISK_LEVELS},
+        status_label={k: l for k, l in RECOMMENDATION_STATUSES},
+    )
+
+
+@app.route("/engagements/<engagement_id>/recommendations/report.csv")
+def engagement_recommendations_report_csv(engagement_id):
+    eng = storage.load_engagement(engagement_id)
+    if not eng:
+        abort(404)
+    _ensure_recommendations(eng)
+    products_by_id = {p["id"]: p for p in eng.get("inventory", {}).get("products", [])}
+    cat_label = {k: l for k, l in RECOMMENDATION_CATEGORIES}
+    status_label = {k: l for k, l in RECOMMENDATION_STATUSES}
+    loe_label = {k: l for k, l in LOE_LEVELS}
+    risk_label = {k: l for k, l in RISK_LEVELS}
+    cat_order = {k: i for i, (k, _l) in enumerate(RECOMMENDATION_CATEGORIES)}
+    status_order = {"accepted": 0, "draft": 1, "deferred": 2}
+
+    sio = io.StringIO()
+    writer = csv.writer(sio)
+    writer.writerow([
+        "Category", "Status", "Finding", "Products",
+        "Business impact", "Tech-debt impact", "Security impact", "Cost impact",
+        "Recommended action", "Level of effort", "Risk level", "Timeline",
+        "Decision owner", "Notes",
+    ])
+    for r in sorted(
+        eng["recommendations"]["recs"].values(),
+        key=lambda x: (cat_order.get(x.get("category", ""), 99),
+                       status_order.get(x.get("status", "draft"), 3),
+                       x.get("finding", "")),
+    ):
+        names = [products_by_id.get(pid, {}).get("product_name", "")
+                 for pid in r.get("product_ids", []) if pid in products_by_id]
+        writer.writerow([
+            cat_label.get(r.get("category", ""), r.get("category", "")),
+            status_label.get(r.get("status", ""), r.get("status", "")),
+            r.get("finding", ""),
+            "; ".join(names),
+            r.get("business_impact", ""),
+            r.get("tech_debt_impact", ""),
+            r.get("security_impact", ""),
+            r.get("cost_impact", ""),
+            r.get("recommended_action", ""),
+            loe_label.get(r.get("level_of_effort", ""), ""),
+            risk_label.get(r.get("risk_level", ""), ""),
+            r.get("timeline", ""),
+            r.get("decision_owner", ""),
+            r.get("notes", ""),
+        ])
+    fn = f"recommendation-report-{eng.get('id')}.csv"
     return Response(
         sio.getvalue(),
         mimetype="text/csv",

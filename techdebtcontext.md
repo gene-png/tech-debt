@@ -34,6 +34,8 @@ The local working copy lives in this worktree under `software_rationalization/`.
 - `6e29025` (2026-04-28) — Phase 8: Estimate Cost Savings (8 files changed, +930 lines).
 - `2553709` (2026-04-28) — Backfill 6e29025 commit hash in change log.
 - `feddd7d` (2026-04-28) — Phase 9: Validate with Stakeholders (8 files changed, +710 lines).
+- `493930c` (2026-04-28) — Backfill feddd7d commit hash in change log.
+- *(2026-04-28) Phase 10 build pending push.*
 
 The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore` — no customer data is ever pushed.
 
@@ -50,7 +52,7 @@ The `data/` JSON files and `data/uploads/` directory are excluded by `.gitignore
 | 7 | Identify Technical Debt        | **Live** |
 | 8 | Estimate Cost Savings          | **Live** |
 | 9 | Validate with Stakeholders     | **Live** |
-| 10 | Create Recommendations        | Planned  |
+| 10 | Create Recommendations        | **Live** |
 | 11 | Create the Executive Summary  | Planned  |
 
 ## Architecture
@@ -192,6 +194,26 @@ validation: {                           ← Phase 9 (anchored to Phase 8 opportu
       overall_status,                 ← not_started | pending | validated | blocked
       notes,
       updated_at,
+    }
+  },
+  finalized, finalized_at,
+}
+
+recommendations: {                      ← Phase 10
+  recs: {
+    "<rec_id>": {
+      id, source_opp_id, seed_key,    ← seed_key=phase8:<opp_id> for auto-seeded; empty for manual
+      finding,
+      product_ids: [...],
+      business_impact, tech_debt_impact, security_impact, cost_impact,
+      recommended_action,
+      category,                       ← one of 8 (immediate_savings, renewal_negotiation, license_reduction, consolidation, retirement, security_risk_reduction, governance_improvement, further_analysis)
+      level_of_effort,                ← low | medium | high | ""
+      risk_level,                     ← low | medium | high | ""
+      timeline, decision_owner,
+      notes,
+      status,                         ← draft | accepted | deferred
+      created_at, updated_at,
     }
   },
   finalized, finalized_at,
@@ -460,6 +482,52 @@ One form per opportunity, single Save button. Submitting empty everything (no st
 - GET `/engagements/<id>/validation/notes` — printable HTML
 - GET `/engagements/<id>/validation/notes.csv` — CSV export
 
+## Phase 10 deliverable
+
+The **Software Rationalization Recommendation Report** — synthesizes Phases 5, 7, 8, and 9 into structured per-finding recommendations leadership can act on. Available as:
+- Workspace: `/engagements/<id>/recommendations`
+- Printable report: `/engagements/<id>/recommendations/report` (grouped by category)
+- CSV export: `/engagements/<id>/recommendations/report.csv`
+
+### Auto-seeding from Phase 8
+
+One recommendation per Phase 8 opportunity, idempotent via `seed_key=phase8:<opp_id>`. Auto-fill logic:
+- **Finding** ← opportunity title
+- **Category** ← `DISPOSITION_TO_CATEGORY` mapping (retire→retirement, replace/consolidate→consolidation, renegotiate→renewal_negotiation, reduce_licenses→license_reduction, other→further_analysis)
+- **Business impact** ← Phase 9 `business_process` answer + `what_breaks` answer; falls back to product `primary_use_case` if no validation
+- **Technical-debt impact** ← distinct Phase 7 flag labels across affected products
+- **Security impact** ← Phase 7 `weak_security` flag (if any) + `data_sensitivity` levels listed
+- **Cost impact** ← formatted from opportunity totals (recurring · first-year · transition)
+- **Recommended action** ← templated by disposition + Phase 9 `notes` if present
+- **Notes** ← combined Phase 8 + Phase 9 freeform notes
+- **Status** ← `accepted` if Phase 8 opportunity is `approved`, else `draft`
+
+Manual fields stay blank at seed time and are filled in by the consultant: `level_of_effort`, `risk_level`, `timeline`, `decision_owner`. The user can override any auto-filled field.
+
+### 11 fields from the playbook
+
+The recommendation card captures all 11 fields the playbook calls for: finding, products involved, business impact, tech-debt impact, security impact, cost impact, recommended action, level of effort, risk level, proposed timeline, decision owner.
+
+### 8 categories
+
+`immediate_savings`, `renewal_negotiation`, `license_reduction`, `consolidation`, `retirement`, `security_risk_reduction`, `governance_improvement`, `further_analysis`. Workspace and report group recommendations by category in this order. The printable report includes a category-definitions reference at the bottom.
+
+### Status quick-actions
+
+`draft` (default for seeded), `accepted` (signed off), `deferred` (parked). Status drives sort order within each category — accepted first, then draft, then deferred.
+
+### Routes
+
+- GET `/engagements/<id>/recommendations` — workspace
+- POST `/engagements/<id>/recommendations/seed` — auto-seed from Phase 8 opportunities (idempotent)
+- POST `/engagements/<id>/recommendations/new` — add a custom recommendation
+- POST `/engagements/<id>/recommendations/<rec_id>/edit` — full update
+- POST `/engagements/<id>/recommendations/<rec_id>/status` — quick accept / draft / defer
+- POST `/engagements/<id>/recommendations/<rec_id>/delete` — delete one
+- POST `/engagements/<id>/recommendations/finalize` — finalize / reopen (advances `status` to `exec_summary`, pre-marks Phase 11 `in_progress`)
+- GET `/engagements/<id>/recommendations/report` — printable HTML
+- GET `/engagements/<id>/recommendations/report.csv` — CSV export
+
 ## Routes quick reference
 
 | Route | Method | Purpose |
@@ -517,6 +585,15 @@ One form per opportunity, single Save button. Submitting empty everything (no st
 | `/engagements/<id>/validation/finalize` | POST | Phase 9 — finalize / reopen |
 | `/engagements/<id>/validation/notes` | GET | Phase 9 — printable validation notes |
 | `/engagements/<id>/validation/notes.csv` | GET | Phase 9 — CSV export |
+| `/engagements/<id>/recommendations` | GET | Phase 10 — recommendations workspace |
+| `/engagements/<id>/recommendations/seed` | POST | Phase 10 — auto-seed from Phase 8 opportunities |
+| `/engagements/<id>/recommendations/new` | POST | Phase 10 — add a custom recommendation |
+| `/engagements/<id>/recommendations/<rid>/edit` | POST | Phase 10 — update all fields |
+| `/engagements/<id>/recommendations/<rid>/status` | POST | Phase 10 — quick accept / draft / defer |
+| `/engagements/<id>/recommendations/<rid>/delete` | POST | Phase 10 — delete one |
+| `/engagements/<id>/recommendations/finalize` | POST | Phase 10 — finalize / reopen |
+| `/engagements/<id>/recommendations/report` | GET | Phase 10 — printable report (grouped by category) |
+| `/engagements/<id>/recommendations/report.csv` | GET | Phase 10 — CSV export |
 
 ## Decisions made
 
@@ -557,11 +634,12 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - ~~Phase 7 (Identify Technical Debt) — per-product flag-checker?~~ **Resolved: yes. 14 debt flags from the playbook, severity selector, free-text notes; auto-suggested flags derived from inventory data (no_owner, unclear_mission, duplicative, unused, poor_adoption, outside_governance, high_cost_low_value, renewal_no_justification); clickable suggestion chips tick the corresponding checkbox; printable register + CSV export.**
 - ~~Phase 8 (Estimate Cost Savings) — separate worksheet or implicit in Phases 5/7?~~ **Resolved: separate worksheet that auto-seeds from Phase 5 dispositions + Phase 7 unused flags. Per-opportunity card with current cost / recurring savings / one-time / migration / training, status (proposed/approved/rejected), and a portfolio rollup that splits "non-rejected" from "approved-only" — the conservative number leadership uses.**
 - ~~Phase 9 (Validate with Stakeholders) — anchor to what?~~ **Resolved: anchor to Phase 8 opportunities. Stakeholder roster (8 role types) parsed from a pipe-separated text block, structured answers to the 7 validation questions, overall status (not_started / pending / validated / blocked), free notes. No orphan validations — every validation lineages back to a savings opportunity.**
+- ~~Phase 10 (Recommendations) — synthesize from prior phases?~~ **Resolved: yes. One auto-seeded recommendation per Phase 8 opportunity. Auto-fill pulls finding/products/cost from Phase 8, business impact from Phase 9 validation answers (with primary_use_case fallback), tech-debt impact from Phase 7 flag labels, security impact from `weak_security` flag + `data_sensitivity` levels, recommended action from disposition mapping. Manual fields (LoE, risk, timeline, decision owner) stay blank at seed time. 8 categories from the playbook drive grouping in workspace and printable report.**
 - **`ANTHROPIC_API_KEY` setup** — chip dropped to spin off a separate session that exports the key, restarts the server, and verifies a real Phase 6 run. Not a blocker for further phase work.
 - Customer-facing self-upload portal — currently the consultant uploads on the customer's behalf. A token-protected upload link the customer can use directly is a future enhancement (would need expiring tokens, throttling, anti-virus scan).
 - Phase 6 token budget — currently sending the entire sanitized inventory in one prompt with `MAX_PRODUCTS_PER_RUN = 200`. For larger customer estates we'd need to chunk the inventory by category and merge findings, or summarize first. Not urgent for v1.
 - Phase 6 attaching customer-supplied documents (Phase 2 uploads) into the AI context — explicitly NOT in v1. Documents may contain unredacted customer data; we'd need a separate redaction pass before they can be attached. Worth thinking about for v2.
-- Phase 10 (Recommendations) — synthesizes Phases 5 (dispositions), 7 (debt), 8 (savings), and 9 (validation) into a structured per-finding recommendation. The playbook calls for: finding, products involved, business impact, technical-debt impact, security impact, cost impact, recommended action, level of effort, risk level, proposed timeline, decision owner. Categories: immediate savings, renewal negotiation, license reduction, product consolidation, product retirement, security risk reduction, governance improvement, further analysis. Likely a per-opportunity recommendation card with auto-fills from prior phases + manual fields for LoE / timeline / decision owner.
+- Phase 11 (Executive Summary) — final synthesis answering the seven leadership questions from the playbook (products reviewed, total spend, products that overlap, products with unused licenses, technical debt identified, estimated cost savings, decisions needed). Likely a single-page printable summary that pulls aggregates from earlier phases (counts from Phase 3 inventory, overlap from Phase 5, debt from Phase 7, savings from Phase 8) plus a "decisions needed" section pulled from Phase 10 recommendations marked draft or deferred. Probably also has a few editable fields for the executive-facing narrative (key finding, leadership ask).
 - Multi-user / auth — not needed for v1 but will be once this is hosted somewhere shared.
 - Backup strategy for `data/` JSON + `data/uploads/` — currently nothing. Once real customer documents are stored, we'll want at least a periodic zip of the engagement folder.
 - Phase 2 file size limit — currently 50 MB per request. Some asset management exports could exceed this; revisit if it becomes an issue.
@@ -678,3 +756,24 @@ Each live phase has a complete end-to-end smoke test (Flask test client) plus li
 - Updated `_sidebar.html`, `engagement_view.html`, `home.html` to surface Phase 9 as Live.
 - New CSS: `.val-card` with status-tinted left-border (good/danger/accent), `.val-questions` two-column grid that collapses to single on narrow screens, `.val-question` typography.
 - Smoke test (file-based): exercised `_parse_stakeholders` over three input shapes (mapped role + agreed status + ISO date; mapped role + lowercase status; unrecognized role + unrecognized status + non-ISO date). All assertions passed: role/status codes map correctly, unrecognized values land in label fields with blank codes, dates normalize through `_coerce_date`. Saved a full validation with 7 answers + 3 stakeholders + validated status — record persisted correctly. Empty submission removed the record from `validation.validations`. Re-saving with content re-created it. `_validation_summary` returns expected counts. Notes HTML and CSV render with the saved data. Finalize advanced engagement to Phase 10 (`recommendations` pre-marked `in_progress`); reopen reverses.
+
+### 2026-04-28 — Phase 10 build (Recommendations)
+
+- Added Phase 10 constants to `app.py`: `RECOMMENDATION_CATEGORIES` (8 from the playbook), `DISPOSITION_TO_CATEGORY` map (Phase 8 → Phase 10), `LOE_LEVELS`, `RISK_LEVELS`, `RECOMMENDATION_STATUSES` (draft / accepted / deferred).
+- Helpers: `_ensure_recommendations`, `_new_recommendation` factory (all 11 playbook fields plus metadata), `_format_money_str` (small money formatter), `_seed_recommendations` (rich auto-fill from Phases 7/8/9 — see below), `_recommendations_summary` (rollup by status/category/risk/LoE).
+- Auto-fill at seed time (per Phase 8 opportunity, idempotent via `seed_key=phase8:<opp_id>`):
+  - `finding` ← opportunity title
+  - `category` ← `DISPOSITION_TO_CATEGORY` map (retire→retirement, replace/consolidate→consolidation, renegotiate→renewal_negotiation, reduce_licenses→license_reduction, other→further_analysis)
+  - `business_impact` ← Phase 9 `business_process` + `what_breaks` validation answers; falls back to product `primary_use_case` when no validation
+  - `tech_debt_impact` ← distinct Phase 7 flag labels across affected products (or "None recorded in Phase 7")
+  - `security_impact` ← Phase 7 `weak_security` flag presence + product `data_sensitivity` levels listed
+  - `cost_impact` ← formatted from `_opportunity_totals` (recurring · first-year · transition)
+  - `recommended_action` ← templated by disposition + Phase 9 free notes if present
+  - `notes` ← combined Phase 8 + Phase 9 freeform notes
+  - `status` ← `accepted` if Phase 8 opp is `approved`, else `draft`
+  - manual fields (LoE, risk, timeline, decision_owner) stay blank
+- Routes: `engagement_recommendations` (GET, sorts by category order then status then finding), `engagement_recommendations_seed`, `engagement_recommendations_new` (custom), `engagement_recommendations_edit`, `engagement_recommendations_status` (quick action), `engagement_recommendations_delete`, `engagement_recommendations_finalize`, `engagement_recommendations_report` (printable, grouped by category), `engagement_recommendations_report_csv`.
+- New templates: `recommendations.html` (6 summary tiles, by-category chip rollup, seed/add/report/csv buttons, per-rec card with editable finding + 4 dropdown selectors in a row + 4 impact textareas in a 2-col responsive grid + recommended action full-width + timeline/decision-owner row + notes + per-rec quick-action footer; "Add custom recommendation" form with multi-product picker; finalize panel) and `recommendations_report.html` (printable: summary table + per-category sections with each rec's full 11-field detail in a definition list + category-definitions reference at bottom).
+- Updated `_sidebar.html`, `engagement_view.html`, `home.html` for Phase 10 Live state.
+- New CSS: `.rec-category-header` (uppercase divider), `.rec-card` with status-tinted left-border (good for accepted, default border for deferred, accent for draft), `.rec-grid` responsive 2-col layout, `.rec-report-item` for the printable view.
+- Smoke test (file-based): seeded inventory + Phase 5 retire disposition + Phase 7 (`weak_security` + `duplicative` flags) + Phase 8 opportunity + Phase 9 validation answers. Phase 10 seed created exactly 1 recommendation with all auto-fill working: category=retirement (from disposition=retire); business_impact contained Phase 9's "Marketing campaign planning" answer plus the "If removed: …" suffix from `what_breaks`; tech_debt_impact listed both Phase 7 flag labels; security_impact mentioned "Weak security controls flagged" + "Data sensitivity: Internal"; cost_impact formatted "$1,000/yr recurring savings"; status=draft (Phase 8 opp was proposed not approved). Re-seed was idempotent. Edited rec with all manual fields (LoE/risk/timeline/decision_owner) and accepted it. Custom recommendation (governance_improvement) added. Quick-action defer worked. Summary returned correct rollups. Report HTML grouped by category and rendered all expected strings; report CSV had header + 2 rec rows. Delete worked. Finalize advanced engagement to Phase 11 (`exec_summary` pre-marked `in_progress`); reopen reverses. Caught and fixed one Jinja gotcha: a context dict key named `items` collided with `dict.items()` method; renamed to `recs`.

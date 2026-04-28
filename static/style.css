@@ -877,3 +877,48 @@ input:focus, textarea:focus, select:focus {
   font-family: inherit;
   font-size: 13px;
 }
+
+/* ---------- Phase 10: recommendations ---------- */
+
+.rec-category-header {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 24px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rec-card { border-left: 3px solid var(--accent); }
+.rec-card.rec-accepted { border-left-color: var(--good); }
+.rec-card.rec-deferred { border-left-color: var(--border-strong); opacity: 0.85; }
+.rec-card.rec-draft    { border-left-color: var(--accent); }
+
+.rec-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.rec-header .opp-title-input { flex: 1; min-width: 0; }
+
+.rec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 8px 14px;
+  margin-top: 12px;
+}
+
+.rec-report-item {
+  border-bottom: 1px solid var(--border);
+  padding: 14px 0;
+}
+.rec-report-item:last-child { border-bottom: none; }
+.rec-report-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  margin-bottom: 4px;
+}

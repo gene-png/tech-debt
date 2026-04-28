@@ -213,11 +213,32 @@
     </div>
 
     <div class="panel">
+      <h2>Phase 10 — Recommendations</h2>
+      {% set rd = eng.get('recommendations') %}
+      {% if rd and rd.finalized %}
+        <div class="notice">Phase 10 finalized on {{ rd.finalized_at[:10] }}.</div>
+      {% elif eng.phase_progress.recommendations == 'in_progress' %}
+        <div class="notice warn">Recommendations in progress.</div>
+      {% else %}
+        <div class="notice warn">Recommendations have not been started.</div>
+      {% endif %}
+      <p class="helper">Auto-seeds one recommendation per Phase 8 opportunity with all 11 fields auto-filled from prior phases. Manual fields: level of effort, risk, timeline, decision owner.</p>
+      <div class="actions">
+        <a class="btn" href="{{ url_for('engagement_recommendations', engagement_id=eng.id) }}">
+          {% if rd and rd.finalized %}Review recommendations{% else %}Open recommendations workspace{% endif %}
+        </a>
+        {% if rd and rd.recs %}
+          <a class="btn secondary" href="{{ url_for('engagement_recommendations_report', engagement_id=eng.id) }}">View report</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>What's next</h2>
-      <p class="helper">Phases 10 through 11 of the playbook will activate in upcoming releases — Recommendations and the Executive Summary. The data model already reserves space for them.</p>
+      <p class="helper">Phase 11 of the playbook will activate in an upcoming release — the Executive Summary. The data model already reserves space for it.</p>
       <ul class="phase-list">
         {% for key, label in phases %}
-          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings', 'validation') %}
+          {% if key not in ('scope', 'data_request', 'inventory', 'normalize', 'overlap', 'ai_review', 'tech_debt', 'savings', 'validation', 'recommendations') %}
             <li><span class="phase-dot status-pending"></span><span>{{ label }}</span><span class="tag" style="margin-left: auto;">Planned</span></li>
           {% endif %}
         {% endfor %}
